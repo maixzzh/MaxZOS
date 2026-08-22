@@ -4,7 +4,7 @@
  */
 
 #define VGA_MEMORY 0xB8000
-#define VGA_ATTR   0x0F
+#define VGA_ATTR   0x01
 #define COLS       80
 #define ROWS       25
 #define SCR_SIZE   (COLS * ROWS) 
