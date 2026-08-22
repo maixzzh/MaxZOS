@@ -35,22 +35,28 @@ Max_Z 是一个从零开始构建的简易操作系统内核，运行于 x86 架
 
 ```bash
 .
-├── acpi.c              # ACPI 电源管理
-├── acpi.h
-├── boot.asm            # 引导入口与栈设置
-├── fs.c                # 内存文件系统
-├── fs.h
-├── grub.cfg            # GRUB 启动配置（打包进 ISO）
-├── linker.ld           # 链接脚本（基址 1MB）
+├── acpi/               # ACPI 电源管理模块
+│   ├── acpi.c
+│   └── acpi.h
+├── fs/                 # 文件系统模块（含字符串工具）
+│   ├── fs.c            # 内存文件系统实现
+│   ├── fs.h
+│   ├── str.c           # 字符串工具（strlen/strcmp/strcpy/itoa_dec）
+│   └── str.h
+├── image/              # 截图资源
+├── kernel/             # 内核核心（引导与链接）
+│   ├── boot.asm        # 引导入口与栈设置
+│   ├── linker.ld       # 链接脚本（基址 1MB）
+│   └── multiboot_header.asm
 ├── main.c              # 内核入口、终端输出、键盘与命令解析
+├── grub.cfg            # GRUB 启动配置（打包进 ISO）
 ├── Makefile            # 构建脚本（产物统一输出到 bin/）
-├── multiboot_header.asm
-├── str.c               # 字符串工具（strlen/strcmp/strcpy/itoa_dec）
-├── str.h
 └── README.md
 
 （构建产物统一生成在 bin/ 目录下，含 kernel.elf 与 myos.iso）
 ```
+
+> 模块划分：文件系统相关改动只需动 `main.c` 与 `fs/` 目录；ACPI 相关改动只需动 `main.c` 与 `acpi/` 目录。
 
 ## 编译和使用指南
 

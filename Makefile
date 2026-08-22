@@ -19,15 +19,16 @@ MKDIR    = mkdir -p
 #   -fno-builtin  : 禁用内置函数（防止编译器替换为库调用）
 #   -fno-stack-protector: 关闭栈保护（无 libc 支持）
 #   -Wall -Wextra : 开启警告，便于发现问题
-CFLAGS   = -m32 -ffreestanding -nostdlib -fno-builtin -fno-stack-protector -Wall -Wextra
+# 头文件搜索路径：各模块目录（main.c 中的 #include "acpi.h" 等保持不变）
+CFLAGS   = -m32 -ffreestanding -nostdlib -fno-builtin -fno-stack-protector -Wall -Wextra -Iacpi -Ifs
 
 # 汇编器标志（ELF 32 位目标）
 NASMFLAGS = -f elf32
 
 # 链接标志
-#   -m elf_i386   : 链接为 32 位 ELF
-#   -T linker.ld  : 使用自定义链接脚本
-LDFLAGS  = -m elf_i386 -T linker.ld
+#   -m elf_i386      : 链接为 32 位 ELF
+#   -T kernel/linker.ld : 使用自定义链接脚本
+LDFLAGS  = -m elf_i386 -T kernel/linker.ld
 
 # 产物目录与目标文件
 BIN      = bin
@@ -49,28 +50,27 @@ $(ISO): $(KERNEL) grub.cfg | $(BIN)
 	rm -rf $(BIN)/iso/          # 清理临时目录
 
 # 链接内核
-$(KERNEL): $(OBJS) linker.ld | $(BIN)
+$(KERNEL): $(OBJS) kernel/linker.ld | $(BIN)
 	$(LD) $(LDFLAGS) -o $@ $(OBJS)
 
-# 编译汇编文件（multiboot_header.asm / boot.asm）
-$(BIN)/multiboot_header.o: multiboot_header.asm | $(BIN)
+# 编译汇编文件（kernel/ 下的 multiboot_header.asm / boot.asm）
+$(BIN)/multiboot_header.o: kernel/multiboot_header.asm | $(BIN)
 	$(NASM) $(NASMFLAGS) -o $@ $<
 
-$(BIN)/boot.o: boot.asm | $(BIN)
+$(BIN)/boot.o: kernel/boot.asm | $(BIN)
 	$(NASM) $(NASMFLAGS) -o $@ $<
 
-# 编译 C 源文件（main.o 补上头文件依赖，修复现有依赖缺失）
-$(BIN)/main.o: main.c acpi.h fs.h str.h | $(BIN)
+# 编译 C 源文件（kernel/、acpi/、fs/ 三个模块目录）
+$(BIN)/main.o: main.c acpi/acpi.h fs/fs.h fs/str.h | $(BIN)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BIN)/acpi.o: acpi.c acpi.h | $(BIN)
+$(BIN)/acpi.o: acpi/acpi.c acpi/acpi.h | $(BIN)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-# 编译文件系统与字符串工具
-$(BIN)/fs.o: fs.c fs.h str.h | $(BIN)
+$(BIN)/fs.o: fs/fs.c fs/fs.h fs/str.h | $(BIN)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BIN)/str.o: str.c str.h | $(BIN)
+$(BIN)/str.o: fs/str.c fs/str.h | $(BIN)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # 创建产物目录（order-only 依赖：目录存在即可，时间戳变化不触发重编译）
