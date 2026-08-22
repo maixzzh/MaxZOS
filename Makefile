@@ -29,7 +29,7 @@ NASMFLAGS = -f elf32
 LDFLAGS  = -m elf_i386 -T linker.ld
 
 # 目标文件
-OBJS = multiboot_header.o boot.o main.o
+OBJS = multiboot_header.o boot.o main.o acpi.o
 
 # 最终产物
 KERNEL = kernel.elf
@@ -60,6 +60,10 @@ boot.o: boot.asm
 
 # 编译 C 源文件（main.c）
 main.o: main.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+# 编译 C 源文件（acpi.c）
+acpi.o: acpi.c acpi.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # 清理生成的文件
