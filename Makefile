@@ -20,7 +20,8 @@ MKDIR    = mkdir -p
 #   -fno-stack-protector: 关闭栈保护（无 libc 支持）
 #   -Wall -Wextra : 开启警告，便于发现问题
 # 头文件搜索路径：各模块目录（main.c 中的 #include "acpi.h" 等保持不变）
-CFLAGS   = -m32 -ffreestanding -nostdlib -fno-builtin -fno-stack-protector -Wall -Wextra -Iacpi -Ifs
+#   -MMD -MP      : 自动生成头文件依赖（bin/*.d），改头文件后 make 自动重编相关源文件
+CFLAGS   = -m32 -ffreestanding -nostdlib -fno-builtin -fno-stack-protector -Wall -Wextra -Iacpi -Ifs -MMD -MP
 
 # 汇编器标志（ELF 32 位目标）
 NASMFLAGS = -f elf32
@@ -31,8 +32,16 @@ NASMFLAGS = -f elf32
 LDFLAGS  = -m elf_i386 -T kernel/linker.ld
 
 # 产物目录与目标文件
+# 源文件自动搜集：新加的 .c/.asm 文件无需修改本文件，自动纳入构建
+#   $(wildcard 目录/模式) : 列出匹配的源文件
+#   $(notdir ...)         : 去掉目录前缀（.o 统一平铺在 bin/ 下）
 BIN      = bin
-OBJS     = $(addprefix $(BIN)/, multiboot_header.o boot.o main.o acpi.o fs.o str.o)
+C_SRCS   = $(wildcard *.c acpi/*.c fs/*.c kernel/*.c)
+ASM_SRCS = $(wildcard kernel/*.asm)
+OBJS     = $(addprefix $(BIN)/, $(notdir $(C_SRCS:.c=.o)) $(notdir $(ASM_SRCS:.asm=.o)))
+
+# 头文件依赖文件（由 gcc -MMD 自动生成，见下方 -include）
+DEPS     = $(OBJS:.o=.d)
 
 # 最终产物
 KERNEL = $(BIN)/kernel.elf
@@ -53,29 +62,33 @@ $(ISO): $(KERNEL) grub.cfg | $(BIN)
 $(KERNEL): $(OBJS) kernel/linker.ld | $(BIN)
 	$(LD) $(LDFLAGS) -o $@ $(OBJS)
 
-# 编译汇编文件（kernel/ 下的 multiboot_header.asm / boot.asm）
-$(BIN)/multiboot_header.o: kernel/multiboot_header.asm | $(BIN)
+# 编译规则（模式规则：% 是通配部分）
+# 例如 bin/acpi.o 会尝试匹配以下规则，找到源文件存在的那一条：
+#   %.o: %.c        → 根目录的 acpi.c
+#   %.o: acpi/%.c   → acpi/ 目录的 acpi.c
+#   %.o: fs/%.c     → fs/ 目录的 acpi.c
+# 注意：不同目录的源文件不能同名（如根目录和 fs/ 不能都有 foo.c）
+
+# 编译 C 源文件
+$(BIN)/%.o: %.c | $(BIN)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BIN)/%.o: acpi/%.c | $(BIN)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BIN)/%.o: fs/%.c | $(BIN)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+# 编译汇编源文件（kernel/ 下的 .asm）
+$(BIN)/%.o: kernel/%.asm | $(BIN)
 	$(NASM) $(NASMFLAGS) -o $@ $<
-
-$(BIN)/boot.o: kernel/boot.asm | $(BIN)
-	$(NASM) $(NASMFLAGS) -o $@ $<
-
-# 编译 C 源文件（kernel/、acpi/、fs/ 三个模块目录）
-$(BIN)/main.o: main.c acpi/acpi.h fs/fs.h fs/str.h | $(BIN)
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-$(BIN)/acpi.o: acpi/acpi.c acpi/acpi.h | $(BIN)
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-$(BIN)/fs.o: fs/fs.c fs/fs.h fs/str.h | $(BIN)
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-$(BIN)/str.o: fs/str.c fs/str.h | $(BIN)
-	$(CC) $(CFLAGS) -c -o $@ $<
 
 # 创建产物目录（order-only 依赖：目录存在即可，时间戳变化不触发重编译）
 $(BIN):
 	$(MKDIR) $(BIN)
+
+# 加载 gcc 自动生成的头文件依赖（.d 文件）；首次构建时不存在，静默跳过
+-include $(DEPS)
 
 # 清理生成的文件（整目录删除）
 clean:
