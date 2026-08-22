@@ -1,7 +1,13 @@
-/* str.c - 内核自带的轻量字符串工具
- * 注意：编译选项 -ffreestanding -fno-builtin，不链接 libc，
- *       定义 libc 同名函数不会冲突
+/*
+ * Copyright (C) 2026 ZhangMaixuan
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
  */
+
+
 #include "str.h"
 
 unsigned int strlen(const char* s) {

@@ -1,4 +1,15 @@
 /*
+ * Max_Z - A toy operating system kernel
+ * Copyright (C) 2026 ZhangMaixuan
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ */
+
+
+/*
  * acpi.c - 通过 ACPI 实现关机（S5 状态）
  * 流程：扫描 RSDP → 解析 RSDT/XSDT 找到 FADT → 写 PM1a_CNT 的 SLP_TYP+SLP_EN
  * 编译选项：-m32 -ffreestanding -nostdlib -fno-builtin -fno-stack-protector

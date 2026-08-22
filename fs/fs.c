@@ -1,13 +1,14 @@
-/* fs.c - 多级目录内存文件系统（全静态数组，无堆分配）
- * 存储后端为 .bss 静态表，重启即丢失；fs.h 公开 API 签名冻结，
- * 将来迁移到磁盘后端时只需整体替换本文件内部实现
+/*
+ * Copyright (C) 2026 ZhangMaixuan
  *
- * 结构模型：目录与文件共用一张条目表（file_t）。
- *   - 根目录固定索引 0，由 fs_init 建立
- *   - 每个目录的"内容"是子链：first_child（头）→ next_sibling（兄弟）
- *   - 每个条目只在父目录的子链中出现一次（ls 即遍历子链）；
- *     fs_pwd 沿 parent 链上溯拼出绝对路径
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
  */
+
+
+
 #include "fs.h"
 #include "str.h"
 

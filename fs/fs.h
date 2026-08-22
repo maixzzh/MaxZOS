@@ -1,9 +1,13 @@
-/* fs.h - 多级目录内存文件系统（全静态数组，无堆分配）
- * 目录与文件共用一张条目表：目录是容器，子项挂在 first_child 兄弟链上。
- * 所有 API 接受路径参数（绝对路径 / 开头，相对路径相对当前目录）；
- * 路径解析集中在 fs.c。存储后端为 .bss 静态表，重启即丢失；
- * API 签名冻结，将来迁移磁盘后端时只需整体替换 fs.c 内部实现
+/*
+ * Copyright (C) 2026 ZhangMaixuan
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
  */
+
+
 #ifndef FS_H
 #define FS_H
 

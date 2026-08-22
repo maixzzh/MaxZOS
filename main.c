@@ -1,10 +1,10 @@
 /*
- * main.c - 带有键盘输入和简单 Shell 的内核
- * 功能：显示提示符 "os<当前路径>> "，接受用户输入，支持退格、回车，
- *       解析 echo / clear / cls / create / cat / ls / rm / delete /
- *       mkdir / cd / exit / about 命令，
- *       Shift 输入上档字符（如 " # $ @ 等），exit 通过 ACPI 关机
- * 编译选项：-m32 -ffreestanding -nostdlib -fno-builtin -fno-stack-protector
+ * Copyright (C) 2026 ZhangMaixuan
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
  */
 
 #include "acpi.h"
