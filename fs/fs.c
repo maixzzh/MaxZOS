@@ -81,7 +81,7 @@ void fs_list(fs_out_fn out) {
     for (int i = 0; i < FS_MAX_FILES; i++) {
         if (!files[i].used) continue;
         out(files[i].name);
-        out("  ");
+        out("\t");
         itoa_dec(files[i].len, num);
         out(num);
         out("\n");

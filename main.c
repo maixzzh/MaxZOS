@@ -15,6 +15,7 @@
 #define COLS        80
 #define ROWS        25
 #define SCR_SIZE    (COLS * ROWS)
+#define TAB_WIDTH   8     /* Tab 制表位宽度（列数），可调为 4 使排版更紧凑 */
 #define KEYBOARD_PORT 0x60
 #define KEYBOARD_STATUS_PORT 0x64
 #define KBD_STATUS_OUTPUT_FULL 0x01
@@ -43,6 +44,14 @@ static void terminal_clear(void) {
 static void terminal_putchar(char c) {
     if (c == '\n') {
         pos = ((pos / COLS) + 1) * COLS;
+        if (pos >= SCR_SIZE) {
+            pos = (ROWS - 1) * COLS;
+        }
+        return;
+    }
+    if (c == '\t') {
+        // 跳到下一个制表位（每 TAB_WIDTH 列一个）
+        pos = ((pos / TAB_WIDTH) + 1) * TAB_WIDTH;
         if (pos >= SCR_SIZE) {
             pos = (ROWS - 1) * COLS;
         }
@@ -89,16 +98,16 @@ static int strncmp(const char* s1, const char* s2, unsigned int n) {
 
 /* ---------- 命令解析辅助 ---------- */
 
-/* 命令匹配：前缀相等且后面必须是空格或行尾（修复 "clearxxx" 误命中 "clear"） */
+/* 命令匹配：前缀相等且后面必须是空格、Tab 或行尾（修复 "clearxxx" 误命中 "clear"） */
 static int cmd_is(const char* name) {
     unsigned int n = strlen(name);
     return strncmp(input_buf, name, n) == 0 &&
-           (input_buf[n] == '\0' || input_buf[n] == ' ');
+           (input_buf[n] == '\0' || input_buf[n] == ' ' || input_buf[n] == '\t');
 }
 
-/* 跳过前导空格 */
+/* 跳过前导空格与 Tab（与空格等价的空白分隔符） */
 static char* skip_spaces(char* p) {
-    while (*p == ' ') p++;
+    while (*p == ' ' || *p == '\t') p++;
     return p;
 }
 
@@ -145,7 +154,7 @@ static void process_command(void) {
 
     // 2. 判断是否为空命令
     if (input_len == 0) {
-        terminal_write("os/> ");
+        terminal_write("maxzos$");
         return;
     }
 
@@ -167,7 +176,7 @@ static void process_command(void) {
         // create <name> [content]：名字为第一个 token，内容支持双引号
         char* p = skip_spaces(input_buf + 6);
         char* name = p;
-        while (*p && *p != ' ' && *p != '"') p++;   // 名字 = 第一个 token
+        while (*p && *p != ' ' && *p != '\t' && *p != '"') p++;   // 名字 = 第一个 token
         if (*p == '\0') {
             terminal_write("usage: create <name> [content]\n");
         } else {
@@ -207,17 +216,20 @@ static void process_command(void) {
         }
     } else if (cmd_is("ls")) {
         // ls：列出所有文件及大小
+        terminal_write("Name\tSize(Byte)\n");
         fs_list(term_write_cb);
     } else if (cmd_is("exit")) {
         // exit：ACPI 关机（正常情况不会返回）
         terminal_write("Shutting down...\n");
         acpi_power_off();
-    } else {
+    } else if (cmd_is("about")){
+        terminal_write("MaxZOS make by Zhangmaixuan\n");
+    }else {
         terminal_write("unknown command\n");
     }
 
     input_len = 0;
-    terminal_write("os/> ");
+    terminal_write("maxzos$");
 }
 
 /* ---------- 键盘处理 ---------- */
@@ -270,6 +282,14 @@ static void handle_keyboard(void) {
         }
         return;
     }
+    if (ch == '\t') {
+        // Tab 键：存入输入缓冲并回显（跳到下一个制表位）
+        if (input_len < INPUT_BUF_SIZE - 1) {
+            input_buf[input_len++] = ch;
+            terminal_putchar(ch);
+        }
+        return;
+    }
     if (ch >= 32 && ch < 127) {
         if (input_len < INPUT_BUF_SIZE - 1) {
             input_buf[input_len++] = ch;
@@ -286,7 +306,8 @@ void kmain(unsigned long magic, unsigned long addr) {
     terminal_clear();
     terminal_write("Welcome to MaxZOS v0.9\n");
     terminal_write("made by ZhangMaixuan\n");
-    terminal_write("os/> ");
+    terminal_write("If you want to get help,please to github repo: maixzzh/MaxZOS\n\n");
+    terminal_write("maxzos$");
 
     // 主循环：轮询键盘
     while (1) {
