@@ -116,10 +116,16 @@ hello
 os/> create note "buy milk"
 os/> ls
 note  8
-os/> cat note
-buy milk
+os/> mkdir docs
+os/> cd docs
+os/docs> create plan "write an OS"
+os/docs> cat plan
+write an OS
+os/docs> cd /
 os/> exit
 ```
+
+注意提示符会跟着当前目录变：`os/docs>` 表示现在在 `docs` 目录里。
 
 输入 `exit` 后系统会真关机，QEMU 窗口自动关闭，终端回到正常状态。
 
@@ -434,13 +440,15 @@ terminal_write("made by ZhangMaixuan\n");     // ← 改这里的文字
 
 ### 8.3 字符串比较函数 strncmp
 
+由 `fs/str.c` 提供（旧版曾内联在 main.c，多级目录改造时统一收进了 str 模块）：
+
 ```c
-static int strncmp(const char* s1, const char* s2, unsigned int n)
+int strncmp(const char* s1, const char* s2, unsigned int n)
 ```
 
-和 C 标准库的 `strncmp` 行为一致：比较 `s1` 和 `s2` 的前 `n` 个字符，相等返回 0，不等返回第一个不同字符的差值。**这是项目自己实现的，不要指望有标准库**。
+和 C 标准库的 `strncmp` 行为一致：比较 `s1` 和 `s2` 的前 `n` 个字符，相等返回 0，不等返回第一个不同字符的差值。**这是项目自己实现的，不要指望有标准库**。它同时服务两个调用方：命令匹配（`cmd_is`）和文件系统路径解析（按"长度 + 内容"匹配路径段名）。
 
-**注意**：项目里还有 `fs/str.c` 里的 `strcmp`（比较整个字符串）和 `strlen`，它们和 main.c 里的 `strncmp` 是三个不同的函数，别搞混。
+**注意**：`str.c` 里还有 `strcmp`（比较整个字符串）和 `strlen`，三个函数各司其职，别搞混。
 
 ### 8.4 命令解析辅助函数
 
@@ -503,6 +511,22 @@ static void term_write_cb(const char* s) {
 
 这是给 `fs_list` 用的"回调函数"（见 9.4 节）。它只是把 `terminal_write` 包装了一下，让文件系统模块能"把输出交给终端"而不用依赖 main.c。
 
+**⑤ `next_arg(char** pp)` —— 取下一个参数（通用参数提取器）**
+
+多级目录改造后新增。与 `extract_quoted` 的区别：`extract_quoted` 对不带引号的参数会返回"整行剩余"（`echo` 需要这个行为），而 `next_arg` 只取**一个 token**——跳过空白，引号开头则按引号提取，否则取到空白处为止（原地写 `'\0'` 截断）。没有参数时返回 `NULL`。所有带路径参数的命令（`create`/`cat`/`ls`/`rm`/`mkdir`/`cd`）都用它取路径。
+
+**⑥ `cmd_args(void)` —— 取命令名后的参数起点**
+
+```c
+static char* cmd_args(void) {
+    char* p = input_buf;
+    while (*p && *p != ' ' && *p != '\t') p++;   // 跳过命令名
+    return skip_spaces(p);
+}
+```
+
+返回"命令名之后、跳过空白"的指针。旧代码各分支手工硬编码命令名长度偏移（如 `input_buf + 4`），命令多了容易错，现在统一用 `cmd_args()` 替代（须在 `cmd_is` 命中后调用）。
+
 ### 8.5 命令解析主函数 process_command
 
 `process_command()` 是命令系统的心脏：**用户按回车后，它被调用一次，负责把 `input_buf` 里的命令拆解、匹配、执行**。
@@ -513,7 +537,7 @@ static void term_write_cb(const char* s) {
 static void process_command(void) {
     terminal_putchar('\n');              // ① 先换行（因为输入时没有换行）
     if (input_len == 0) {                // ② 空命令？直接打提示符
-        terminal_write("os/> ");
+        print_prompt();
         return;
     }
     if (cmd_is("clear") || cmd_is("cls")) {
@@ -524,9 +548,13 @@ static void process_command(void) {
         ...
     } else if (cmd_is("cat")) {
         ...
-    } else if (cmd_is("delete")) {
+    } else if (cmd_is("rm") || cmd_is("delete")) {
         ...
     } else if (cmd_is("ls")) {
+        ...
+    } else if (cmd_is("mkdir")) {
+        ...
+    } else if (cmd_is("cd")) {
         ...
     } else if (cmd_is("exit")) {
         terminal_write("Shutting down...\n");
@@ -535,7 +563,7 @@ static void process_command(void) {
         terminal_write("unknown command\n");   // ④ 都不匹配
     }
     input_len = 0;                       // ⑤ 清空输入缓冲
-    terminal_write("os/> ");             // ⑥ 打印下一个提示符
+    print_prompt();                      // ⑥ 打印下一个提示符（带当前路径）
 }
 ```
 
@@ -547,23 +575,27 @@ static void process_command(void) {
 4. 全部不匹配 → `unknown command`。
 5. 执行完后 `input_len = 0`：清空缓冲，等待下一条命令。**注意：input_buf 的内容并没有被清空**（只是长度归零），下次输入会从开头覆盖写——这是刻意的，节省时间。
 
+**提示符 `print_prompt()`**：输出 `"os" + 当前路径 + "> "`。路径由文件系统实时提供（`fs_pwd`，见 9.3 节），所以 `cd` 之后提示符自动变化：根目录 `os/> `，进入 `docs` 后 `os/docs> `。旧版的固定字符串 `"maxzos$"` 已被它取代（共 3 处：空命令、命令结束、kmain 启动）。
+
 **当前命令清单与行为**：
 
 | 命令 | 匹配条件 | 行为 |
 |---|---|---|
 | `clear` / `cls` | `cmd_is("clear") \|\| cmd_is("cls")` | 清屏 |
 | `echo <内容>` | `cmd_is("echo")` | 输出内容；双引号包裹时剥离引号；未闭合引号报 "unclosed quote" |
-| `create <文件名> [内容]` | `cmd_is("create")` | 创建文件；无内容时提示 usage；成功无输出；失败输出错误消息 |
-| `cat <文件名>` | `cmd_is("cat")` | 显示文件内容；失败输出错误消息 |
-| `delete <文件名>` | `cmd_is("delete")` | 删除文件；失败输出错误消息 |
-| `ls` | `cmd_is("ls")` | 列出所有文件：`文件名  大小`，每行一个 |
+| `create <路径> [内容]` | `cmd_is("create")` | 创建文件；无内容时提示 usage；成功无输出；失败输出错误消息 |
+| `cat <路径>` | `cmd_is("cat")` | 显示文件内容（只取第一个参数）；失败输出错误消息 |
+| `rm` / `delete <路径>` | `cmd_is("rm") \|\| cmd_is("delete")` | 删除文件或**空**目录；非空目录、根目录、当前目录拒绝 |
+| `ls [路径]` | `cmd_is("ls")` | 列出目录子项：文件 `名字  大小`，目录 `名字/  -`；无参数列出当前目录 |
+| `mkdir <路径>` | `cmd_is("mkdir")` | 创建目录 |
+| `cd <路径>` | `cmd_is("cd")` | 切换当前目录（提示符随之变化）；成功无输出 |
 | `exit` | `cmd_is("exit")` | 打印 "Shutting down..." 并 ACPI 关机 |
 
 **命令的边界行为（有意设计，测试时用得上）**：
 
 - `echo "hello`（未闭合引号）→ `unclosed quote`
-- `create foo`（只有文件名没内容）→ `usage: create <name> [content]`（创建空文件要用 `create foo ""`）
-- `cat foo bar` → 整个 `foo bar` 被当作文件名查找 → `file not found`（安全，不会误操作）
+- `create foo`（只有路径没内容）→ `usage: create <path> [content]`（创建空文件要用 `create foo ""`）
+- `cat foo bar` → 只读取 `foo`，多余的 `bar` 被忽略（多级目录改造后的新行为，旧版是整行当文件名）
 - `clearxxx` → `unknown command`（因为 `cmd_is` 的边界检查）
 
 ### 8.6 键盘处理 handle_keyboard
@@ -605,11 +637,11 @@ while (1) {
 
 ```c
 void kmain(unsigned long magic, unsigned long addr) {
-    fs_init();                    // ① 初始化文件系统（目前是空操作）
+    fs_init();                    // ① 初始化文件系统（建立根目录）
     terminal_clear();             // ② 清屏
     terminal_write("Welcome to MaxZOS v0.9\n");   // ③ 欢迎语（可改）
     terminal_write("made by ZhangMaixuan\n");     // ④ 署名（可改）
-    terminal_write("os/> ");      // ⑤ 初始提示符（可改）
+    print_prompt();               // ⑤ 初始提示符（= "os/> "，当前在根目录）
     while (1) {                   // ⑥ 主循环：永远等待键盘
         handle_keyboard();
     }
@@ -633,75 +665,99 @@ void kmain(unsigned long magic, unsigned long addr) {
 具体来说：
 
 ```c
-static file_t files[FS_MAX_FILES];   // 32 个文件槽位，编译时分配好
+static file_t files[FS_MAX_FILES];   // 64 个条目槽位，编译时分配好
 ```
 
-- 文件系统最多同时存在 32 个文件（`FS_MAX_FILES`）
-- 每个文件的"槽位"大小固定：文件名 32 字节 + 内容 257 字节 + 两个数字
-- 整个表大约 9KB 内存，在 `.bss` 段（自动清零的全局区）
+- 文件系统最多同时存在 64 个**条目**（`FS_MAX_FILES`）——文件、目录共用这张表
+- 每个"槽位"大小固定：名字 32 字节 + 内容 257 字节 + 若干索引字段，约 308 字节
+- 整个表大约 19KB 内存，在 `.bss` 段（自动清零的全局区）
 
-**为什么这样设计**：内核没有 `malloc`（没有堆管理器），也不能用操作系统的内存分配。静态数组是最简单、最不容易出错的方案。
+**"万物皆文件"的简化实现**：目录也是表里的一个条目（`type = FS_TYPE_DIR`），只是它的"内容"不是文本，而是一个**子项链表**（`first_child` 指向第一个子条目，子条目用 `next_sibling` 串成链）。`ls` 遍历这条链，就能列出目录里的东西。
+
+**为什么这样设计**：内核没有 `malloc`（没有堆管理器），也不能用操作系统的内存分配。静态数组是最简单、最不容易出错的方案。子项链表全部用"数组下标"串接（`-1` 表示链尾），**不需要额外分配任何内存**。
 
 **含义**：你以后扩展文件系统（比如加权限字段、加修改时间），就是**往 `file_t` 结构体里加字段**，其余逻辑照旧——因为空间是提前分配的，只是每个槽位变大一点。
 
 ### 9.2 常量与数据结构（fs.h）
 
-`fs.h` 是文件系统的"合同"，分为三部分：
+`fs.h` 是文件系统的"合同"，分为四部分：
 
 **① 规模常量**（改这些就能调整系统的容量上限）：
 
 ```c
-#define FS_MAX_FILES     32    // 最多同时存在的文件数
-#define FS_MAX_NAME_LEN  32    // 文件名缓冲区大小（含 '\0'），实际最长 31 字符
-#define FS_MAX_CONTENT   256   // 每个文件内容最多 256 字节
+#define FS_MAX_FILES     64      // 条目总数上限（文件 + 目录共用一个表）
+#define FS_MAX_NAME_LEN  32      // 单段名字缓冲区（含 '\0'），实际最长 31 字符
+#define FS_MAX_CONTENT   256     // 每个文件内容最多 256 字节
+#define FS_MAX_PATH      128     // fs_pwd 输出缓冲的建议大小
+#define FS_TYPE_FILE     0       // 条目类型：文件
+#define FS_TYPE_DIR      1       // 条目类型：目录
 ```
+
+注意 `FS_MAX_NAME_LEN` 是**路径中"一段"**（两个 `/` 之间）的名字上限，不是整个路径的上限——路径长短不受它限制。
 
 **② 错误码枚举**：
 
 ```c
 typedef enum {
     FS_OK = 0,          // 成功
-    FS_EXISTS,          // 同名文件已存在
-    FS_NOT_FOUND,       // 文件不存在
-    FS_FULL,            // 文件表已满
-    FS_EMPTY_NAME,      // 文件名为空
-    FS_NAME_TOO_LONG,   // 文件名超过 31 字符
+    FS_EXISTS,          // 同名条目已存在
+    FS_NOT_FOUND,       // 条目不存在（路径某段找不到）
+    FS_FULL,            // 条目表已满
+    FS_EMPTY_NAME,      // 路径为空
+    FS_NAME_TOO_LONG,   // 单段名字超过 31 字符
     FS_BAD_CONTENT,     // 内容超过 256 字节
+    /* ---- 多级目录新增，追加在末尾（不重排旧值） ---- */
+    FS_IS_DIR,          // 期望是文件，实际是目录（如 cat 目录）
+    FS_NOT_DIR,         // 期望是目录，实际是文件（路径中间段或末段）
+    FS_BAD_PATH,        // 路径语法问题（如 create /、创建名为 . 或 ..）
+    FS_PATH_TOO_LONG,   // 构造的路径超过 FS_MAX_PATH
+    FS_DIR_NOT_EMPTY,   // 删除非空目录
+    FS_IS_ROOT,         // 试图删除根目录
+    FS_IS_CWD,          // 试图删除当前目录或其祖先目录
 } fs_status_t;
 ```
 
-**这是本项目的"返回码规范"**：所有文件系统函数都返回这个枚举。你调用时用 `if (st != FS_OK)` 判断是否成功。**想加新的错误情况（比如"文件被锁定"）就在枚举末尾加一项**，然后记得在 main.c 的 `fs_err_str` 里加对应的错误消息（第 22 节有示例）。
+**这是本项目的"返回码规范"**：所有文件系统函数都返回这个枚举。你调用时用 `if (st != FS_OK)` 判断是否成功。**想加新的错误情况就在枚举末尾加一项**，然后记得在 main.c 的 `fs_err_str` 里加对应的错误消息（第 22 节有示例）。
 
-**③ 文件结构体**：
+**③ 条目结构体**：
 
 ```c
 typedef struct {
-    char  name[FS_MAX_NAME_LEN];      // 文件名（字符串，'\0' 结尾）
-    char  content[FS_MAX_CONTENT + 1];// 文件内容（256 + 1 个 '\0'）
-    unsigned short len;               // 内容实际长度（不含 '\0'）
-    unsigned char  used;              // 1 = 这个槽位正在被使用，0 = 空闲
+    char           name[FS_MAX_NAME_LEN];  // 单段名字（不含 '/'）；根目录存 "/"
+    unsigned char  type;                   // FS_TYPE_FILE / FS_TYPE_DIR
+    int            parent;                 // 父目录索引；根目录指向自己（0）
+    int            next_sibling;           // 父目录子链中的下一项；-1 = 链尾
+    int            first_child;            // 首个子项索引（仅目录）；-1 = 空目录
+    unsigned short len;                    // 内容长度（仅文件有效）
+    unsigned char  used;                   // 1 = 槽位占用
+    char           content[FS_MAX_CONTENT + 1];  // 内容（仅文件有效）
 } file_t;
 ```
 
-**核心概念：文件表是一个"槽位数组"**。`used` 字段标记哪个槽位有文件——删除文件不是"抹掉内容"，而是把 `used` 改成 0（内容留在原地但已不可访问，下次创建文件会覆盖它）。
+**核心概念：一张"槽位表" + 两张链**。`used` 标记槽位是否占用；每个条目通过 `parent` 找到父目录、通过 `next_sibling` 在父目录的子链中串行。**一个条目只出现在它父目录的子链里一次**——这就是"目录层级"的全部秘密：`ls` 列目录 = 走子链。
+
+**根目录是索引 0**：由 `fs_init` 建立，`parent` 指向自己（所以根目录里 `..` 还是根）。它不挂在任何父链上，因此 `ls` 永远不会显示它。
 
 ### 9.3 公开接口（fs.h 中声明的函数）
 
 | 函数 | 作用 | 返回值 |
 |---|---|---|
-| `fs_status_t fs_create(const char* name, const char* content)` | 创建文件 | `FS_OK` 或错误码 |
-| `fs_status_t fs_read(const char* name, char* out, unsigned int maxlen)` | 读出文件内容到 `out` | `FS_OK` / `FS_NOT_FOUND` |
-| `fs_status_t fs_delete(const char* name)` | 删除文件 | `FS_OK` / `FS_NOT_FOUND` |
-| `void fs_list(fs_out_fn out)` | 列出所有文件（通过回调输出） | 无 |
-| `void fs_init(void)` | 初始化文件系统 | 无 |
+| `fs_status_t fs_create(const char* path, const char* content)` | 创建文件（content 可为 NULL 视为空） | `FS_OK` 或错误码 |
+| `fs_status_t fs_mkdir(const char* path)` | 创建目录 | `FS_OK` 或错误码 |
+| `fs_status_t fs_read(const char* path, char* out, unsigned int maxlen)` | 读出文件内容到 `out` | `FS_OK` / `FS_NOT_FOUND` / `FS_IS_DIR` |
+| `fs_status_t fs_delete(const char* path)` | 删除文件或**空**目录 | `FS_OK` 或错误码 |
+| `fs_status_t fs_list(const char* path, fs_out_fn out)` | 列出目录子项；`path == NULL` 表示当前目录 | `FS_OK` / `FS_NOT_FOUND` / `FS_NOT_DIR` |
+| `fs_status_t fs_cd(const char* path)` | 切换当前目录（解析成功才生效） | `FS_OK` / `FS_NOT_FOUND` / `FS_NOT_DIR` |
+| `fs_status_t fs_pwd(char* out, unsigned int maxlen)` | 把当前目录写成绝对路径（根 = `"/"`） | `FS_OK` / `FS_PATH_TOO_LONG` |
+| `void fs_init(void)` | 建立根目录；将来从磁盘/modules 加载也写在这里 | 无 |
 
-**这四个函数就是"文件系统的全部对外接口"。main.c 的命令就是调它们实现的。**
+**路径参数**：所有函数都接受路径，`/` 开头是绝对路径（从根开始），否则是相对路径（从当前目录开始）。路径中间可以用 `.`（当前）、`..`（上级），如 `cat ../f`、`ls .`。
 
 调用示例（读文件）：
 
 ```c
 char buf[257];                 // 内容最多 256 字符 + '\0'
-fs_status_t st = fs_read("note", buf, sizeof(buf));
+fs_status_t st = fs_read("docs/plan", buf, sizeof(buf));  // 相对路径
 if (st == FS_OK) {
     terminal_write(buf);       // 读出成功，直接输出
 } else {
@@ -711,50 +767,70 @@ if (st == FS_OK) {
 
 **关于 `fs_read` 的细节**：`maxlen` 是目标缓冲区大小。它最多复制 `maxlen - 1` 字节，然后**一定补一个 `'\0'` 结尾**。所以调用时缓冲区至少留 1 字节余量（如 `char buf[257]` + `sizeof(buf)`）。
 
-**关于 `fs_list` 的回调**：`fs_list` 不直接打印，而是每找到一个文件就调用一次你给它的函数 `out`，把"一行文本"（如 `note  8\n`）传给它。main.c 里传的是 `term_write_cb`（= terminal_write）。**这样设计的好处**：文件系统模块不依赖任何具体的输出设备，将来可以接串口、接文件。
+**关于 `fs_list` 的回调**：`fs_list` 不直接打印，而是每找到一个子项就调用一次你给它的函数 `out`，把"一行文本"（如 `note  8\n`、`docs/  -\n`）传给它。目录行是"名字 + `/` + 大小列 `-`"。main.c 里传的是 `term_write_cb`（= terminal_write）。**这样设计的好处**：文件系统模块不依赖任何具体的输出设备，将来可以接串口、接文件。
+
+**关于 `fs_cd` 与 `fs_pwd`**：当前目录存在 fs.c 内部（`static int fs_cwd`），main.c 拿不到它，只能通过 `fs_pwd` 要路径字符串——`print_prompt` 就是这么做的。
 
 ### 9.4 内部实现（fs.c）
 
-`fs.c` 内部有四个"非公开"函数（`static`，外部看不到）：
+`fs.c` 内部的核心（`static`，外部看不到）：
 
 | 函数 | 作用 |
 |---|---|
-| `static int fs_find(const char* name)` | 在文件表里找同名文件，返回槽位下标（找不到返回 -1） |
-| `static int fs_find_free(void)` | 找一个空闲槽位，返回下标（没有返回 -1） |
-| `static fs_status_t fs_add(...)` | 共用的"写入核心"：完成全部校验后把数据写入槽位 |
-| `files[FS_MAX_FILES]` | 全局文件表（在 `.bss` 段，开机自动全 0 = 全部空闲） |
+| `static int fs_find_free(void)` | 找一个空闲槽位（从 1 起，索引 0 恒为根），返回下标（没有返回 -1） |
+| `static int fs_lookup_child(dir, name, namelen)` | 在 dir 的子链中按名字（长度 + 内容）找条目，返回下标或 -1 |
+| `static fs_status_t fs_resolve_path(path, &parent, &name, &namelen)` | **路径解析核心**：把路径拆成（父目录索引, 末段名字） |
+| `static int fs_resolve(path)` | 全路径查找：返回条目下标（≥0），失败返回负错误码 |
+| `static fs_status_t fs_add_entry(...)` | 共用的"写入核心"：完成全部校验后写槽位并挂到父链尾 |
+| `static void fs_unlink_entry(idx)` | 从父链摘除条目并释放槽位 |
+| `files[FS_MAX_FILES]` / `fs_cwd` | 全局条目表 / 当前目录索引（在 `.bss` 段） |
 
-**`fs_add` 的校验顺序**（这是文件系统最重要的逻辑，创建文件的所有规则都在这里）：
+**路径解析（`fs_resolve_path`）是理解整个模块的钥匙**：
+
+- 绝对路径从根（索引 0）出发，相对路径从当前目录出发
+- 逐段推进：段名在**原地**比对（零拷贝、不分配内存），`fs_lookup_child` 用 `strncmp` 按长度匹配
+- `.` 段跳过；`..` 段上溯到 `parent`（根目录的 `..` 还是根）
+- 连续斜杠 `a//b` 和尾部斜杠 `a/` 都被容忍
+- 中间某段不存在 → `FS_NOT_FOUND`；中间段是文件 → `FS_NOT_DIR`
+- 末段单独返回（名字 + 长度），由调用方决定是"查找"还是"创建"
+
+**`fs_add_entry` 的校验顺序**（创建条目（文件/目录）的所有规则都在这里）：
 
 ```
-① 文件名为空？        → FS_EMPTY_NAME
-② 文件名超长（≥32）？ → FS_NAME_TOO_LONG
-③ 已有同名文件？      → FS_EXISTS
-④ 内容超长（>256）？  → FS_BAD_CONTENT
-⑤ 文件表满了？        → FS_FULL
-⑥ 全部通过 → 找到空闲槽，复制名字、复制内容、记长度、置 used=1
+① 末段名为空（如 create /、mkdir .）？ → FS_BAD_PATH
+② 单段名字超长（≥32）？               → FS_NAME_TOO_LONG
+③ 名字是 "." 或 ".."？                → FS_BAD_PATH
+④ 父目录不是目录？                     → FS_NOT_DIR
+⑤ 父目录里已有同名条目？               → FS_EXISTS
+⑥ 文件内容超长（>256）？               → FS_BAD_CONTENT
+⑦ 条目表满了？                         → FS_FULL
+⑧ 全部通过 → 写槽位，挂到父链尾（保持创建顺序）
 ```
 
 **顺序很重要**：比如"重名"的检查在"内容超长"之前，所以 `create aaa aaa...`（内容超长且重名）报的是重名错误。以后加新校验（如"文件名不能含特殊字符"）也按这个思路**插在合适的位置**。
 
-**`fs_init` 目前是空壳**：
+**`fs_init` 建立根目录**：
 
 ```c
 void fs_init(void) {
-    /* 预留：将来解析 multiboot modules / 挂载磁盘后端 */
+    /* 固定索引 0：name="/"，type=DIR，parent=0（自指） */
+    ...
+    /* 预留：将来解析 multiboot modules / 挂载磁盘后端，
+       预置条目直接调 fs_add_entry 填充 */
 }
 ```
 
-因为 `.bss` 段自动清零，文件表天然是"全空"状态，所以初始化无事可做。**将来做持久化（从磁盘加载文件）时，把加载逻辑写在这里**（第 35 节）。
+`.bss` 段自动清零，所以其余槽位天然空闲。**将来做持久化（从磁盘加载文件）时，把加载逻辑写在这里**（第 35 节）——公开 API 和命令层不用改。
 
 ### 9.5 str.c —— 字符串工具
 
-`fs/str.c` 提供了四个函数（声明在 `str.h`）：
+`fs/str.c` 提供了五个函数（声明在 `str.h`）：
 
 | 函数 | 作用 | 类比标准库 |
 |---|---|---|
 | `unsigned int strlen(const char* s)` | 求字符串长度（不含 '\0'） | `strlen` |
 | `int strcmp(const char* a, const char* b)` | 比较两个字符串是否相同（返回 0 表示相同） | `strcmp` |
+| `int strncmp(const char* a, const char* b, unsigned int n)` | 比较前 n 个字符（多级目录路径解析的段匹配靠它） | `strncmp` |
 | `char* strcpy(char* dst, const char* src)` | 把 src 复制到 dst（含 '\0'） | `strcpy` |
 | `void itoa_dec(unsigned int value, char* buf)` | 把无符号整数转成十进制字符串 | `sprintf(buf, "%u", value)` |
 
@@ -1474,31 +1550,39 @@ static char* extract_quoted(char** pp) {
 **① 在 fs.h 声明新函数**（放在现有声明后面）：
 
 ```c
-fs_status_t fs_create(const char* name, const char* content);
-fs_status_t fs_read(const char* name, char* out, unsigned int maxlen);
-fs_status_t fs_delete(const char* name);
-fs_status_t fs_rename(const char* oldname, const char* newname);   // ← 新增
-void fs_list(fs_out_fn out);
+fs_status_t fs_create(const char* path, const char* content);
+fs_status_t fs_mkdir(const char* path);
+fs_status_t fs_read(const char* path, char* out, unsigned int maxlen);
+fs_status_t fs_delete(const char* path);
+fs_status_t fs_rename(const char* oldpath, const char* newpath);   // ← 新增
+void fs_list(const char* path, fs_out_fn out);
 ```
 
 **② 在 fs.c 实现它**（放在 `fs_delete` 后面，用已有的内部函数）：
 
 ```c
-fs_status_t fs_rename(const char* oldname, const char* newname) {
+fs_status_t fs_rename(const char* oldpath, const char* newpath) {
+    int parent;
+    const char* name;
+    unsigned int namelen;
+    fs_status_t st;
     int i;
 
-    if (newname[0] == '\0') return FS_EMPTY_NAME;        // 新名为空
-    if (strlen(newname) >= FS_MAX_NAME_LEN) return FS_NAME_TOO_LONG;
-    if (fs_find(newname) >= 0) return FS_EXISTS;         // 新名已存在
-    i = fs_find(oldname);                                 // 旧名必须存在
-    if (i < 0) return FS_NOT_FOUND;
+    st = fs_resolve_path(newpath, &parent, &name, &namelen);  // 拆出新路径
+    if (st != FS_OK) return st;
+    if (fs_lookup_child(parent, name, namelen) >= 0) return FS_EXISTS;  // 新名已存在
+    i = fs_resolve(oldpath);                                 // 旧路径必须存在
+    if (i < 0) return (fs_status_t)(-i);
 
-    strcpy(files[i].name, newname);                       // 只改名字
+    for (unsigned int k = 0; k < namelen; k++) {
+        files[i].name[k] = name[k];
+    }
+    files[i].name[namelen] = '\0';      // 按长度拷贝（段尾可能不是 '\0'，不能 strcpy）
     return FS_OK;
 }
 ```
 
-**注意**：这里**复用了 `fs_find` 和 `strcpy`**，没有重复造轮子——这是项目里加新功能的正确姿势：先看看内部已有的函数能不能复用。
+**注意**：这里**复用了 `fs_resolve_path` / `fs_lookup_child` / `fs_resolve`**，没有重复造轮子——这是项目里加新功能的正确姿势：先看看内部已有的函数能不能复用（9.4 节有内部函数清单）。
 
 **③ 在 main.c 加命令分支**（参考第 17 节的参数解析模板）：
 
@@ -1642,40 +1726,9 @@ static const char* fs_err_str(fs_status_t s) {
 
 ## 22. 修改命令解析的边界行为（进阶）
 
-**目标**：让 `cat` 支持引号文件名（现在 `cat foo bar` 会把整行当文件名）。
+**现状**：多级目录改造时，`cat` 已经改成**只取第一个参数**——`cat foo bar` 读取 `foo`，多余的 `bar` 被忽略。实现靠 `next_arg`（8.4 节⑤）：它跳过空白、取到下一个空白处为止（原地写 `'\0'` 截断），引号开头则按引号提取。
 
-**涉及文件**：`main.c`（`process_command` 的 cat 分支）
-
-**当前实现**：
-
-```c
-} else if (cmd_is("cat")) {
-    char* p = skip_spaces(input_buf + 3);
-    if (*p == '\0') {
-        terminal_write("usage: cat <name>\n");
-    } else {
-        char buf[FS_MAX_CONTENT + 1];
-        fs_status_t st = fs_read(p, buf, sizeof(buf));   // p 是整行剩余部分
-        ...
-```
-
-**改成"只取第一个参数"**：
-
-```c
-} else if (cmd_is("cat")) {
-    char* p = skip_spaces(input_buf + strlen("cat"));
-    char* name = p;
-    while (*p && *p != ' ') p++;        // 在第一个空格处截断
-    *p = '\0';
-    if (*name == '\0') {
-        terminal_write("usage: cat <name>\n");
-    } else {
-        char buf[FS_MAX_CONTENT + 1];
-        fs_status_t st = fs_read(name, buf, sizeof(buf));
-        ...
-```
-
-改完后 `cat foo bar` 会读取 `foo`（忽略多余的 `bar`）。**注意**：这个改动改变了既有的"安全行为"（整行作为文件名找不到会报 not found），属于行为变更，改之前想清楚是否真的需要。**"刻意设计的安全边界"和"bug"之间的区别**，见第 30 节。
+**如果你还想改别的边界行为**（比如让 `cd` 支持不带参数回主目录）：思路是一样的——找到 `process_command` 里对应分支，用 `next_arg` / `extract_quoted` 调整取参逻辑。每次改之前想清楚：这是"刻意设计的安全边界"（如 `cat foo bar` 旧版整行当文件名，找不到就报 not found，不会误操作），还是真正的 bug？区别见第 30 节。
 
 # 第五部分　调试与故障排查
 
@@ -1848,7 +1901,9 @@ for r in range(25):
 
 ### 25.3 模拟按键（自动化测试）
 
-`sendkey` 可以模拟键盘输入，配合 `pmemsave` 可以实现"无人值守测试"（本项目的自动化回归测试就是这么做的）。一个最小的自动化测试脚本示例：
+`sendkey` 可以模拟键盘输入，配合 `pmemsave` 可以实现"无人值守测试"。**本项目已有一份现成的自动化测试**：`make test`（脚本在 `tools/fs_test.py`，覆盖命令回归、目录操作、错误路径、边界用例，47 项全过）。改完代码跑一遍它，能快速发现破坏。
+
+如果你想自己写一个最小的示例（手动改脚本时的起点）：
 
 ```bash
 # 用 python 连接监控台并发送命令（先按上面方式启动 QEMU）
@@ -2092,23 +2147,47 @@ os/> exit                  → 期望：打印 Shutting down... 然后 QEMU 关�
 ### 32.2 文件系统
 
 ```
-os/> ls                    → 期望：无输出（空文件表）
+os/> ls                    → 期望：只显示表头（Name  Size(Byte)），空文件表无条目
 os/> create a hello        → 期望：无输出（成功）
 os/> create b "hello world"→ 期望：无输出（成功，内容含空格）
-os/> ls                    → 期望：
-a  5
-b  11
+os/> ls                    → 期望：表头 + a  5 / b  11
 os/> cat a                 → 期望：hello
 os/> cat b                 → 期望：hello world
 os/> create a again         → 期望：file already exists
-os/> create c               → 期望：usage: create <name> [content]
+os/> create c               → 期望：usage: create <path> [content]
 os/> create "" x            → 期望：empty name
 os/> cat missing            → 期望：file not found
 os/> delete b               → 期望：无输出（成功）
 os/> cat b                  → 期望：file not found（已删除）
-os/> ls                     → 期望：只显示 a  5
 os/> delete b               → 期望：file not found（重复删除）
 ```
+
+**多级目录（新增）**：
+
+```
+os/> mkdir sub             → 期望：无输出（成功）
+os/> ls                    → 期望：表头 + sub/  -（目录名带 /，大小列 -）
+os/> create sub/f hello    → 期望：无输出（成功）
+os/> ls sub                → 期望：表头 + f  5
+os/> cat sub/f             → 期望：hello
+os/> cd sub                → 期望：提示符变为 os/sub>
+os/> cat ../f              → 期望：hello（.. = 上级目录）
+os/> cd ..                 → 期望：提示符回到 os/>
+os/> cd /sub               → 期望：绝对路径，提示符 os/sub>
+os/> cd /                  → 期望：回到根
+os/> cat sub               → 期望：is a directory
+os/> mkdir a/b             → 期望：not a directory（a 是文件时）
+os/> rm /                  → 期望：cannot remove root
+os/> rm .（在根目录）      → 期望：cannot remove root
+os/> rm .（在子目录）      → 期望：cannot remove current directory
+os/> mkdir sub2; create sub2/x; rm sub2 → 期望：directory not empty
+os/> rm sub/f              → 期望：无输出（成功）
+os/> rm sub                → 期望：无输出（成功，空目录可删）
+os/> mkdir .               → 期望：bad path
+os/> create / x            → 期望：bad path
+```
+
+**偷懒提示**：`make test` 已把上面大部分用例自动化（tools/fs_test.py），改完代码先跑它。
 
 ### 32.3 异常与边界
 
@@ -2182,8 +2261,8 @@ static void printf_simple(const char* fmt, const char* s, int d) {
 | ★★☆ | 简易 printf | 低 | 第 33 节 |
 | ★★☆ | 文件权限/只读标志 | 中 | `file_t` 加 `mode` 字段 + `fs_add` 加一条校验（第 9.4 节说明过） |
 | ★★☆ | 从宿主机预置文件（multiboot modules） | 中 | 通过 QEMU `-initrd` 把文件带进内存，`fs_init` 里解析。**不需要写设备驱动** |
-| ★☆☆ | 多级目录 | 高 | `file_t` 加类型与父目录字段，路径解析。**这是最值得引入"字符串拆分"需求的时机** |
-| ★☆☆ | 磁盘持久化（ATA PIO） | 很高 | 写硬盘驱动 + 磁盘格式，工作量数天。**建议等前面的都做完再考虑** |
+| ✅ 已完成 | 多级目录 | — | 2026-08 完成：`file_t` 加类型/父目录/子链字段，路径解析见 9.4 节，命令 `mkdir/cd/rm`。**下一步建议：内容数据池**（每文件内嵌 256B 的缓冲随目录条目浪费，磁盘持久化前先做块池） |
+| ★☆☆ | 磁盘持久化（ATA PIO） | 很高 | 写硬盘驱动 + 磁盘格式（超级块 + 条目表 + 数据区，可复用现有"索引即指针"的兄弟链结构），工作量数天。**建议等前面的都做完再考虑** |
 | ★☆☆ | 中断与多任务 | 很高 | 全新领域，需要先学操作系统理论 |
 
 **决策建议**：每次只选一个方向，按第 4 节的工作循环推进。**每次改动保持"一次一改一测"**，即使功能简单也不要急。
@@ -2224,6 +2303,7 @@ static void printf_simple(const char* fmt, const char* s, int d) {
 make           编译全部 + 打包 ISO
 make run       编译内核并运行（日常推荐）
 make run-iso   编译并模拟光盘引导
+make test      自动化冒烟测试（无头 QEMU，见 tools/fs_test.py）
 make clean     删除 bin/
 ```
 
@@ -2232,10 +2312,12 @@ make clean     删除 bin/
 ```
 echo <文字>              输出文字（支持 "引号"）
 clear  /  cls           清屏
-create <名> [内容]       创建文件（内容带空格用引号；空文件用 ""）
-cat <名>                查看文件内容
-delete <名>             删除文件
-ls                      列出文件
+create <路径> [内容]     创建文件（内容带空格用引号；空文件用 ""）
+cat <路径>              查看文件内容
+mkdir <路径>            创建目录
+cd <路径>               切换目录（.. 上级、/ 根、相对或绝对路径均可）
+ls [路径]               列出目录内容（子目录名带 / 后缀，大小列 -）
+rm  /  delete <路径>    删除文件或空目录（delete 是旧名，两者等价）
 exit                    关机
 ```
 
@@ -2260,7 +2342,10 @@ git restore .           放弃未提交改动（危险）
 | `process_command` | 命令解析与执行 |
 | `cmd_is` | 命令精确匹配（带边界检查） |
 | `skip_spaces` | 跳空格 |
-| `extract_quoted` | 提取参数（支持双引号） |
+| `extract_quoted` | 提取参数（支持双引号，取整段剩余） |
+| `next_arg` | 取下一个参数（只取一个 token，支持引号） |
+| `cmd_args` | 命令名后的参数起点（替代硬编码偏移） |
+| `print_prompt` | 打印提示符 `os<当前路径>> ` |
 | `terminal_write` / `terminal_putchar` / `terminal_clear` / `terminal_backspace` | 终端输出 |
 | `fs_err_str` | 错误码 → 文案 |
 | `term_write_cb` | fs_list 输出回调 |
@@ -2269,11 +2354,14 @@ git restore .           放弃未提交改动（危险）
 
 | 函数 | 作用 |
 |---|---|
-| `fs_create(name, content)` | 创建 |
-| `fs_read(name, out, maxlen)` | 读取 |
-| `fs_delete(name)` | 删除 |
-| `fs_list(out)` | 列出 |
-| `fs_init()` | 初始化（预留） |
+| `fs_create(path, content)` | 创建文件 |
+| `fs_mkdir(path)` | 创建目录 |
+| `fs_read(path, out, maxlen)` | 读取 |
+| `fs_delete(path)` | 删除文件或空目录 |
+| `fs_list(path, out)` | 列出目录（path 为 NULL 表示当前目录） |
+| `fs_cd(path)` | 切换当前目录 |
+| `fs_pwd(out, maxlen)` | 当前目录绝对路径 |
+| `fs_init()` | 建立根目录（挂载钩子） |
 
 **fs/str.h**（字符串工具）
 
@@ -2281,6 +2369,7 @@ git restore .           放弃未提交改动（危险）
 |---|---|
 | `strlen(s)` | 字符串长度 |
 | `strcmp(a, b)` | 字符串比较 |
+| `strncmp(a, b, n)` | 比较前 n 个字符（路径段匹配用） |
 | `strcpy(dst, src)` | 字符串复制 |
 | `itoa_dec(value, buf)` | 数字转字符串 |
 
@@ -2296,10 +2385,12 @@ git restore .           放弃未提交改动（危险）
 |---|---|---|---|
 | `VGA_ATTR` | main.c | `0x1F` | 全局颜色 |
 | `INPUT_BUF_SIZE` | main.c | `256` | 命令行输入上限 |
-| `FS_MAX_FILES` | fs.h | `32` | 文件数上限 |
-| `FS_MAX_NAME_LEN` | fs.h | `32` | 文件名上限（含 '\0'） |
+| `FS_MAX_FILES` | fs.h | `64` | 条目总数上限（文件 + 目录） |
+| `FS_MAX_NAME_LEN` | fs.h | `32` | 单段名字上限（含 '\0'） |
 | `FS_MAX_CONTENT` | fs.h | `256` | 文件内容上限 |
-| 提示符文字 `"os/> "` | main.c（3 处） | — | 命令行提示符 |
+| `FS_MAX_PATH` | fs.h | `128` | fs_pwd 输出缓冲建议大小 |
+| `FS_TYPE_FILE` / `FS_TYPE_DIR` | fs.h | `0` / `1` | 条目类型 |
+| 提示符 `os<路径>> ` | main.c `print_prompt` | — | 命令行提示符（跟随当前目录） |
 
 ---
 

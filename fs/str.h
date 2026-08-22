@@ -9,6 +9,7 @@
 
 unsigned int strlen(const char* s);
 int strcmp(const char* s1, const char* s2);
+int strncmp(const char* s1, const char* s2, unsigned int n);
 char* strcpy(char* dst, const char* src);
 /* 十进制整数转字符串（反转法），buf 至少 12 字节 */
 void itoa_dec(unsigned int value, char* buf);

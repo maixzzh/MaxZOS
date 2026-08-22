@@ -102,5 +102,10 @@ run: $(KERNEL)
 run-iso: $(ISO)
 	qemu-system-x86_64 -cdrom $(ISO)
 
+# 自动化冒烟测试：无头 QEMU + QMP 注入按键，比对 VGA 屏幕验证 FS 行为
+# 详见 tools/fs_test.py；依赖 python3 与 qemu-system-i386
+test: $(KERNEL)
+	python3 tools/fs_test.py
+
 # 声明伪目标
-.PHONY: all clean run run-iso
+.PHONY: all clean run run-iso test

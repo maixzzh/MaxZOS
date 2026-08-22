@@ -18,6 +18,17 @@ int strcmp(const char* s1, const char* s2) {
     return *s1 - *s2;
 }
 
+/* 仿 libc strncmp：比较前 n 个字符，遇 '\0' 提前结束 */
+int strncmp(const char* s1, const char* s2, unsigned int n) {
+    while (n > 0 && *s1 && *s1 == *s2) {
+        s1++;
+        s2++;
+        n--;
+    }
+    if (n == 0) return 0;
+    return *s1 - *s2;
+}
+
 char* strcpy(char* dst, const char* src) {
     char* d = dst;
     while ((*d++ = *src++)) ;

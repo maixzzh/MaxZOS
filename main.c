@@ -1,7 +1,8 @@
 /*
  * main.c - 带有键盘输入和简单 Shell 的内核
- * 功能：显示提示符 "os/> "，接受用户输入，支持退格、回车，
- *       解析 echo / clear / cls / exit 命令，
+ * 功能：显示提示符 "os<当前路径>> "，接受用户输入，支持退格、回车，
+ *       解析 echo / clear / cls / create / cat / ls / rm / delete /
+ *       mkdir / cd / exit / about 命令，
  *       Shift 输入上档字符（如 " # $ @ 等），exit 通过 ACPI 关机
  * 编译选项：-m32 -ffreestanding -nostdlib -fno-builtin -fno-stack-protector
  */
@@ -87,15 +88,6 @@ static void terminal_backspace(void) {
     }
 }
 
-/* ---------- 字符串比较（仿 strncmp） ---------- */
-static int strncmp(const char* s1, const char* s2, unsigned int n) {
-    while (n > 0 && *s1 && *s1 == *s2) {
-        s1++; s2++; n--;
-    }
-    if (n == 0) return 0;
-    return *s1 - *s2;
-}
-
 /* ---------- 命令解析辅助 ---------- */
 
 /* 命令匹配：前缀相等且后面必须是空格、Tab 或行尾（修复 "clearxxx" 误命中 "clear"） */
@@ -128,9 +120,42 @@ static char* extract_quoted(char** pp) {
     return p;
 }
 
+/* 取下一个参数：跳过空白；引号开头 → 引号内容；否则取到空白处（原地截断）。
+ * 成功返回参数指针并推进 *pp；无参数返回 NULL */
+static char* next_arg(char** pp) {
+    char* p = skip_spaces(*pp);
+    if (*p == '\0') return NULL;
+    if (*p == '"') return extract_quoted(pp);
+    char* start = p;
+    while (*p && *p != ' ' && *p != '\t') p++;
+    if (*p != '\0') { *p = '\0'; *pp = p + 1; }
+    else            { *pp = p; }
+    return start;
+}
+
+/* 返回当前命令名之后（跳过空白）的参数起点；须在 cmd_is 命中后调用，
+ * 替代各分支里手工硬编码的命令名长度偏移 */
+static char* cmd_args(void) {
+    char* p = input_buf;
+    while (*p && *p != ' ' && *p != '\t') p++;
+    return skip_spaces(p);
+}
+
 /* fs_list 输出回调：转发到终端输出 */
 static void term_write_cb(const char* s) {
     terminal_write(s);
+}
+
+/* 提示符 = "os" + 当前路径 + "> "；根为 "os/> "，子目录为 "os/sub/> " */
+static void print_prompt(void) {
+    char path[FS_MAX_PATH];
+    if (fs_pwd(path, sizeof(path)) != FS_OK) {
+        terminal_write("os/> ");   /* 兜底：路径超长时回到根提示（理论不可达） */
+        return;
+    }
+    terminal_write("os");
+    terminal_write(path);
+    terminal_write("> ");
 }
 
 /* 文件系统错误码 → 提示消息 */
@@ -143,6 +168,13 @@ static const char* fs_err_str(fs_status_t s) {
     case FS_EMPTY_NAME:    return "empty name\n";
     case FS_NAME_TOO_LONG: return "name too long (max 31 chars)\n";
     case FS_BAD_CONTENT:   return "content too long (max 256 bytes)\n";
+    case FS_IS_DIR:        return "is a directory\n";
+    case FS_NOT_DIR:       return "not a directory\n";
+    case FS_BAD_PATH:      return "bad path\n";
+    case FS_PATH_TOO_LONG: return "path too long\n";
+    case FS_DIR_NOT_EMPTY: return "directory not empty\n";
+    case FS_IS_ROOT:       return "cannot remove root\n";
+    case FS_IS_CWD:        return "cannot remove current directory\n";
     default:               return "unknown fs error\n";
     }
 }
@@ -154,7 +186,7 @@ static void process_command(void) {
 
     // 2. 判断是否为空命令
     if (input_len == 0) {
-        terminal_write("maxzos$");
+        print_prompt();
         return;
     }
 
@@ -173,16 +205,14 @@ static void process_command(void) {
             terminal_putchar('\n');
         }
     } else if (cmd_is("create")) {
-        // create <name> [content]：名字为第一个 token，内容支持双引号
-        char* p = skip_spaces(input_buf + 6);
-        char* name = p;
-        while (*p && *p != ' ' && *p != '\t' && *p != '"') p++;   // 名字 = 第一个 token
-        if (*p == '\0') {
-            terminal_write("usage: create <name> [content]\n");
+        // create <path> [content]：路径为第一个 token，内容支持双引号
+        char* p = cmd_args();
+        char* name = next_arg(&p);
+        if (name == NULL || *skip_spaces(p) == '\0') {
+            // 无路径或无内容：沿用旧版 "create <name> [content]" 的 usage 行为
+            terminal_write("usage: create <path> [content]\n");
         } else {
-            char* rest = p + 1;   // 分隔符之后的内容
-            *p = '\0';            // 终止名字
-            char* content = extract_quoted(&rest);
+            char* content = extract_quoted(&p);
             if (content == NULL) {
                 terminal_write("unclosed quote\n");
             } else {
@@ -191,13 +221,14 @@ static void process_command(void) {
             }
         }
     } else if (cmd_is("cat")) {
-        // cat <name>：显示文件内容
-        char* p = skip_spaces(input_buf + 3);
-        if (*p == '\0') {
-            terminal_write("usage: cat <name>\n");
+        // cat <path>：显示文件内容（只取第一个参数）
+        char* p = cmd_args();
+        char* arg = next_arg(&p);
+        if (arg == NULL) {
+            terminal_write("usage: cat <path>\n");
         } else {
             char buf[FS_MAX_CONTENT + 1];
-            fs_status_t st = fs_read(p, buf, sizeof(buf));
+            fs_status_t st = fs_read(arg, buf, sizeof(buf));
             if (st == FS_OK) {
                 terminal_write(buf);
                 terminal_putchar('\n');
@@ -205,19 +236,43 @@ static void process_command(void) {
                 terminal_write(fs_err_str(st));
             }
         }
-    } else if (cmd_is("delete")) {
-        // delete <name>：删除文件
-        char* p = skip_spaces(input_buf + 6);
-        if (*p == '\0') {
-            terminal_write("usage: delete <name>\n");
+    } else if (cmd_is("rm") || cmd_is("delete")) {
+        // rm / delete <path>：删除文件或空目录（delete 为旧名兼容）
+        char* p = cmd_args();
+        char* arg = next_arg(&p);
+        if (arg == NULL) {
+            terminal_write("usage: rm <path>\n");
         } else {
-            fs_status_t st = fs_delete(p);
+            fs_status_t st = fs_delete(arg);
             if (st != FS_OK) terminal_write(fs_err_str(st));
         }
     } else if (cmd_is("ls")) {
-        // ls：列出所有文件及大小
+        // ls [path]：列出目录子项；无参数列出当前目录
+        char* p = cmd_args();
+        char* arg = next_arg(&p);
         terminal_write("Name\tSize(Byte)\n");
-        fs_list(term_write_cb);
+        fs_status_t st = fs_list(arg, term_write_cb);
+        if (st != FS_OK) terminal_write(fs_err_str(st));
+    } else if (cmd_is("mkdir")) {
+        // mkdir <path>：创建目录
+        char* p = cmd_args();
+        char* arg = next_arg(&p);
+        if (arg == NULL) {
+            terminal_write("usage: mkdir <path>\n");
+        } else {
+            fs_status_t st = fs_mkdir(arg);
+            if (st != FS_OK) terminal_write(fs_err_str(st));
+        }
+    } else if (cmd_is("cd")) {
+        // cd <path>：切换当前目录；成功无输出（提示符自动刷新）
+        char* p = cmd_args();
+        char* arg = next_arg(&p);
+        if (arg == NULL) {
+            terminal_write("usage: cd <path>\n");
+        } else {
+            fs_status_t st = fs_cd(arg);
+            if (st != FS_OK) terminal_write(fs_err_str(st));
+        }
     } else if (cmd_is("exit")) {
         // exit：ACPI 关机（正常情况不会返回）
         terminal_write("Shutting down...\n");
@@ -229,7 +284,7 @@ static void process_command(void) {
     }
 
     input_len = 0;
-    terminal_write("maxzos$");
+    print_prompt();
 }
 
 /* ---------- 键盘处理 ---------- */
@@ -307,7 +362,7 @@ void kmain(unsigned long magic, unsigned long addr) {
     terminal_write("Welcome to MaxZOS v0.9\n");
     terminal_write("made by ZhangMaixuan\n");
     terminal_write("If you want to get help,please to github repo: maixzzh/MaxZOS\n\n");
-    terminal_write("maxzos$");
+    print_prompt();
 
     // 主循环：轮询键盘
     while (1) {
