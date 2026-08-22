@@ -45,7 +45,7 @@ DEPS     = $(OBJS:.o=.d)
 
 # 最终产物
 KERNEL = $(BIN)/kernel.elf
-ISO    = $(BIN)/myos.iso
+ISO    = $(BIN)/maxzos.iso
 
 # 默认目标
 all: $(ISO)
