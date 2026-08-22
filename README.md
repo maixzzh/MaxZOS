@@ -17,28 +17,39 @@ Max_Z 是一个从零开始构建的简易操作系统内核，运行于 x86 架
 | :--- | :--- | :--- |
 | **echo** | `echo [字符串]` | 在屏幕上输出指定的文本。支持带引号（`"Hello"`）或不带引号（`Hello`）两种写法。 |
 | **clear / cls** | `clear` 或 `cls` | 清空当前屏幕终端的全部内容，将光标重置至左上角。 |
+| **create** | `create <文件名> [内容]` | 创建文件（最多 32 个文件，文件名 ≤31 字符，内容 ≤256 字节）。内容含空格时用双引号括起，如 `create notes "hello world"`；空文件用 `create notes ""`。 |
+| **cat** | `cat <文件名>` | 读取并显示文件内容。 |
+| **delete** | `delete <文件名>` | 删除文件。 |
+| **ls** | `ls` | 列出所有文件及内容大小。 |
 |**exit**|`exit`|可以实现ACPI断电，QEMU进程以退出码0关闭|
+
+> 注：文件系统为纯内存实现（静态数组），重启后数据丢失；命令前缀必须完整（`clearxxx` 不再误命中 `clear`）。
 
 ### 2. 内核基础特性
 - **Multiboot 协议兼容**：可通过 GRUB 引导加载程序启动。
 - **ACPI 初步支持**：包含 `acpi.c/h` 模块，为后续电源管理和硬件枚举打下基础。
 - **基础终端交互**：提供简易的命令行读取与解析循环。
+- **内存文件系统**：包含 `fs.c/h` 模块（单级目录、静态数组存储），提供 create/read/delete/list 操作接口。
 
 ## 项目结构
 
 ```bash
 .
-├── acpi.c
+├── acpi.c              # ACPI 电源管理
 ├── acpi.h
-├── boot.asm
-├── grub.cfg
-├── linker.ld
-├── main.c
-├── Makefile
+├── boot.asm            # 引导入口与栈设置
+├── fs.c                # 内存文件系统
+├── fs.h
+├── grub.cfg            # GRUB 启动配置（打包进 ISO）
+├── linker.ld           # 链接脚本（基址 1MB）
+├── main.c              # 内核入口、终端输出、键盘与命令解析
+├── Makefile            # 构建脚本（产物统一输出到 bin/）
 ├── multiboot_header.asm
+├── str.c               # 字符串工具（strlen/strcmp/strcpy/itoa_dec）
+├── str.h
 └── README.md
 
-1 directory, 9 files
+（构建产物统一生成在 bin/ 目录下，含 kernel.elf 与 myos.iso）
 ```
 
 ## 编译和使用指南

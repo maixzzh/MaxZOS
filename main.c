@@ -7,6 +7,8 @@
  */
 
 #include "acpi.h"
+#include "fs.h"
+#include "str.h"
 
 #define VGA_MEMORY  0xB8000
 #define VGA_ATTR    0x1F
@@ -85,6 +87,57 @@ static int strncmp(const char* s1, const char* s2, unsigned int n) {
     return *s1 - *s2;
 }
 
+/* ---------- 命令解析辅助 ---------- */
+
+/* 命令匹配：前缀相等且后面必须是空格或行尾（修复 "clearxxx" 误命中 "clear"） */
+static int cmd_is(const char* name) {
+    unsigned int n = strlen(name);
+    return strncmp(input_buf, name, n) == 0 &&
+           (input_buf[n] == '\0' || input_buf[n] == ' ');
+}
+
+/* 跳过前导空格 */
+static char* skip_spaces(char* p) {
+    while (*p == ' ') p++;
+    return p;
+}
+
+/* 参数提取：跳过前导空格；若以 '"' 开头则提取引号内内容（原地截断），
+ * *pp 推进到参数结束之后；未闭合引号返回 NULL */
+static char* extract_quoted(char** pp) {
+    char* p = skip_spaces(*pp);
+    if (*p == '"') {
+        p++;
+        char* start = p;
+        while (*p && *p != '"') p++;
+        if (*p != '"') return NULL;   // 未闭合引号
+        *p = '\0';
+        *pp = p + 1;
+        return start;
+    }
+    *pp = p;
+    return p;
+}
+
+/* fs_list 输出回调：转发到终端输出 */
+static void term_write_cb(const char* s) {
+    terminal_write(s);
+}
+
+/* 文件系统错误码 → 提示消息 */
+static const char* fs_err_str(fs_status_t s) {
+    switch (s) {
+    case FS_OK:            return "";
+    case FS_EXISTS:        return "file already exists\n";
+    case FS_NOT_FOUND:     return "file not found\n";
+    case FS_FULL:          return "file table full\n";
+    case FS_EMPTY_NAME:    return "empty name\n";
+    case FS_NAME_TOO_LONG: return "name too long (max 31 chars)\n";
+    case FS_BAD_CONTENT:   return "content too long (max 256 bytes)\n";
+    default:               return "unknown fs error\n";
+    }
+}
+
 /* ---------- 命令解析 ---------- */
 static void process_command(void) {
     // 1. 先换行（因为输入是在同一行）
@@ -96,30 +149,66 @@ static void process_command(void) {
         return;
     }
 
-    // 3. clear / cls：清屏（两个命令等价）
-    if (strncmp(input_buf, "clear", 5) == 0 || strncmp(input_buf, "cls", 3) == 0) {
+    // 3. 命令匹配
+    if (cmd_is("clear") || cmd_is("cls")) {
+        // 清屏（两个命令等价）
         terminal_clear();
-    } else if (strncmp(input_buf, "echo", 4) == 0) {
+    } else if (cmd_is("echo")) {
+        // echo：无引号输出原文，双引号提取引号内容
         char* p = input_buf + 4;
-        while (*p == ' ') p++;
-
-        if (*p == '"') {
-            // 有双引号：提取引号内容
-            p++; 
-            char* start = p;
-            while (*p && *p != '"') p++;
-            if (*p == '"') {
-                *p = '\0';   // 临时截断
-                terminal_write(start);
-                terminal_putchar('\n');
-            } else {
-                terminal_write("unclosed quote\n");
-            }
+        char* arg = extract_quoted(&p);
+        if (arg == NULL) {
+            terminal_write("unclosed quote\n");
         } else {
-            terminal_write(p);
+            terminal_write(arg);
             terminal_putchar('\n');
         }
-    } else if (strncmp(input_buf, "exit", 4) == 0) {
+    } else if (cmd_is("create")) {
+        // create <name> [content]：名字为第一个 token，内容支持双引号
+        char* p = skip_spaces(input_buf + 6);
+        char* name = p;
+        while (*p && *p != ' ' && *p != '"') p++;   // 名字 = 第一个 token
+        if (*p == '\0') {
+            terminal_write("usage: create <name> [content]\n");
+        } else {
+            char* rest = p + 1;   // 分隔符之后的内容
+            *p = '\0';            // 终止名字
+            char* content = extract_quoted(&rest);
+            if (content == NULL) {
+                terminal_write("unclosed quote\n");
+            } else {
+                fs_status_t st = fs_create(name, content);
+                if (st != FS_OK) terminal_write(fs_err_str(st));
+            }
+        }
+    } else if (cmd_is("cat")) {
+        // cat <name>：显示文件内容
+        char* p = skip_spaces(input_buf + 3);
+        if (*p == '\0') {
+            terminal_write("usage: cat <name>\n");
+        } else {
+            char buf[FS_MAX_CONTENT + 1];
+            fs_status_t st = fs_read(p, buf, sizeof(buf));
+            if (st == FS_OK) {
+                terminal_write(buf);
+                terminal_putchar('\n');
+            } else {
+                terminal_write(fs_err_str(st));
+            }
+        }
+    } else if (cmd_is("delete")) {
+        // delete <name>：删除文件
+        char* p = skip_spaces(input_buf + 6);
+        if (*p == '\0') {
+            terminal_write("usage: delete <name>\n");
+        } else {
+            fs_status_t st = fs_delete(p);
+            if (st != FS_OK) terminal_write(fs_err_str(st));
+        }
+    } else if (cmd_is("ls")) {
+        // ls：列出所有文件及大小
+        fs_list(term_write_cb);
+    } else if (cmd_is("exit")) {
         // exit：ACPI 关机（正常情况不会返回）
         terminal_write("Shutting down...\n");
         acpi_power_off();
@@ -190,6 +279,9 @@ static void handle_keyboard(void) {
 }
 
 void kmain(unsigned long magic, unsigned long addr) {
+    // 挂载文件系统（预留：将来从 multiboot modules / 磁盘加载）
+    fs_init();
+
     // 清屏并显示启动横幅与初始提示符
     terminal_clear();
     terminal_write("Welcome to MaxZOS v0.9\n");
