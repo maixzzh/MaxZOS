@@ -431,11 +431,11 @@ VGA 文本模式把屏幕当作一块内存。屏幕上一个"字符格子"占 *
 
 4. **没有 `printf`**。系统里没有格式化输出函数。想输出数字（比如文件大小）时，用 `itoa_dec`（8.6 节）把数字转成字符串再 `terminal_write`。**第 29 节会教你怎么自己加一个 printf**。
 
-**修改欢迎语**（最常见的维护需求之一）在 `kmain` 里：
+**修改欢迎语**（最常见的维护需求之一）在 `kmain` 里。**注意：文字内容由文件开头的常量生成，想改文字请去改常量（见 §14），下面的代码不用动**：
 
 ```c
-terminal_write("Welcome to MaxZOS v0.9\n");   // ← 改这里的文字
-terminal_write("made by ZhangMaixuan\n");     // ← 改这里的文字
+terminal_write("Welcome to " OS_NAME " v" OS_VERSION_STR "\n");  // 横幅：由开头常量拼出
+terminal_write("made by " OS_AUTHOR "\n");                       // 署名：由开头常量拼出
 ```
 
 ### 8.3 字符串比较函数 strncmp
@@ -639,8 +639,8 @@ while (1) {
 void kmain(unsigned long magic, unsigned long addr) {
     fs_init();                    // ① 初始化文件系统（建立根目录）
     terminal_clear();             // ② 清屏
-    terminal_write("Welcome to MaxZOS v0.9\n");   // ③ 欢迎语（可改）
-    terminal_write("made by ZhangMaixuan\n");     // ④ 署名（可改）
+    terminal_write("Welcome to " OS_NAME " v" OS_VERSION_STR "\n");  // ③ 欢迎语（文字由开头常量生成）
+    terminal_write("made by " OS_AUTHOR "\n");                       // ④ 署名（由开头常量生成）
     print_prompt();               // ⑤ 初始提示符（= "os/> "，当前在根目录）
     while (1) {                   // ⑥ 主循环：永远等待键盘
         handle_keyboard();
@@ -956,13 +956,13 @@ touch fs/fs.h && make      # 观察：main.o 和 fs.o 被自动重编，acpi.o �
 打包进 ISO 的引导菜单配置。当前内容：
 
 ```
-menuentry "My OS - Hello World" {
+menuentry "MaxZOS" {
     multiboot /boot/kernel.elf
     boot
 }
 ```
 
-意思是：启动菜单里有一项"Hello World"，它加载 `/boot/kernel.elf`（即 ISO 内的内核）并启动。**一般不用动**。菜单显示的文字（"My OS - Hello World"）想改可以改，不影响功能。
+意思是：启动菜单里有一项"MaxZOS"，它加载 `/boot/kernel.elf`（即 ISO 内的内核）并启动。**一般不用动**。菜单显示的文字想改可以改，不影响功能（grub.cfg 是独立配置文件，无法共用 main.c 里的 `OS_NAME` 常量，改系统名时记得这里也要同步）。
 
 # 第四部分　维护操作手册
 
@@ -970,38 +970,38 @@ menuentry "My OS - Hello World" {
 >
 > **通用验证方法**（每一节都适用）：改完代码 → 终端执行 `make run` → 在 QEMU 里输入相关命令验证 → 没问题后 `make` 打包并提交 git。
 
-## 14. 修改欢迎语和系统提示符
+## 14. 修改系统名称、版本号、提示符（系统标识信息）
 
-**目标**：改开机显示的文字、改命令行的提示符（现在是 `os/> `）。
+**目标**：改系统名称（`MaxZOS`）、版本号（`v0.9`）、构建日期、作者名、命令行提示符（`os/> `）。
 
-**修改文件**：`main.c`（根目录）
+**修改文件**：`main.c`（根目录）——**只改文件开头的常量区，其余代码一律不用动**。
 
 **步骤**：
 
-1. 打开 `main.c`，找到 `kmain` 函数：
+1. 打开 `main.c`，找到文件开头的"系统标识信息"常量区：
 
 ```c
-void kmain(unsigned long magic, unsigned long addr) {
-    fs_init();
-    terminal_clear();
-    terminal_write("Welcome to MaxZOS v0.9\n");    // ← 开机第一行
-    terminal_write("made by ZhangMaixuan\n");      // ← 开机第二行
-    terminal_write("os/> ");                       // ← 初始提示符
-    while (1) {
-        handle_keyboard();
-    }
-}
+/* ---------- 系统标识信息（集中定义，改这里即可全局生效） ---------- */
+#define OS_NAME            "MaxZOS"        /* 系统名称（横幅、about、帮助链接共用） */
+#define OS_AUTHOR          "ZhangMaixuan"  /* 作者（横幅与 about 共用） */
+#define OS_VERSION_MAJOR   0               /* 版本号：大版本 */
+#define OS_VERSION_MINOR   9               /* 版本号：中版本 */
+#define OS_BUILD_YEAR      2026            /* 构建年 */
+#define OS_BUILD_DATE      "0823"          /* 构建日期（月日，4 位数字） */
 ```
 
-2. 直接改引号里的文字即可。注意：
-   - `\n` 是换行符（C 语言标准写法）
-   - **提示符有三个地方**：`kmain` 里的初始提示符、`process_command` 里的两处 `terminal_write("os/> ")`（空命令分支和函数末尾）。想改提示符文字（比如改成 `MaxZOS$ `），需要改**全部三处**，否则会出现"开机是一个提示符、回车后变另一个"的割裂现象。
+2. 改常量即可。开机横幅（`Welcome to MaxZOS v0.9`）、`about` 命令、帮助链接里的系统名**自动跟着变**，不需要逐处找字符串。
 
-**验证**：`make run` → 开机显示新文字 → 随便执行一个命令后提示符保持新样式。
+**理解一下这些常量的关系**：
+
+- 版本显示串 `v0.9` 由 大版本号 + 中版本号 拼成；构建日期显示为 `2026-0823`（构建年-构建日期）。拼接发生在常量区下方的 `OS_VERSION_STR` / `OS_BUILD_STR` 两个宏里，一般不用动。
+- **提示符** = `OS_PROMPT_NAME`（前缀）+ 当前路径 + `OS_PROMPT_SUFFIX`（后缀）。根目录是 `os/> `，子目录是 `os/docs> `。想改成 `MaxZOS$ ` 风格，改这两个常量即可——**不再有"三处提示符"的问题**，所有提示符都由 `print_prompt()` 一个函数生成。
+
+**验证**：`make run` → 开机横幅显示新版本号 → 输入 `about` 显示版本与构建信息 → 敲几个命令确认提示符样式统一。
 
 **常见错误**：
 
-- 只改了一处提示符 → 提示符时变时不变（补齐另外两处）
+- 常量值写错类型：`OS_BUILD_DATE` 是带引号的字符串 `"0823"`，`OS_BUILD_YEAR` 是不带引号的数字 `2026`，别搞混（数字不能带引号、字符串必须带引号）。
 - 字符串里写中文 → **屏幕上显示乱码**。内核的 VGA 文本模式只支持 ASCII 字符（英文、数字、基本标点）。**想显示中文需要完整的字库和绘图代码，不在本手册范围**。所以界面文字请用英文。
 
 ## 15. 修改屏幕颜色
@@ -1175,8 +1175,10 @@ static int cmd_is(const char* name) {
 **目标**：用户输入 `about` 后，屏幕显示：
 
 ```
-MaxZOS v0.9 - a toy OS
+MaxZOS v0.9 (2026-0823) made by ZhangMaixuan
 ```
+
+> 提示：真实代码里这行文字由文件开头的版本常量拼出（见 §14）；教程里先用字面量，把注意力集中在命令分支本身。
 
 **第 1 步：确定插入位置**
 
@@ -1195,7 +1197,7 @@ MaxZOS v0.9 - a toy OS
 ```c
     } else if (cmd_is("about")) {
         // about：显示版本信息
-        terminal_write("MaxZOS v0.9 - a toy OS\n");
+        terminal_write("MaxZOS v0.9 (2026-0823) made by ZhangMaixuan\n");
     }
 ```
 
@@ -1207,7 +1209,7 @@ MaxZOS v0.9 - a toy OS
         fs_list(term_write_cb);
     } else if (cmd_is("about")) {                     // ← 你插入的部分从这里开始
         // about：显示版本信息
-        terminal_write("MaxZOS v0.9 - a toy OS\n");
+        terminal_write("MaxZOS v0.9 (2026-0823) made by ZhangMaixuan\n");
     } else if (cmd_is("exit")) {                      // ← 到这里结束
         // exit：ACPI 关机（正常情况不会返回）
         terminal_write("Shutting down...\n");
@@ -1221,7 +1223,7 @@ MaxZOS v0.9 - a toy OS
 |---|---|
 | `} else if (cmd_is("about")) {` | 新增的检查口：如果输入是 `about`，进这个分支 |
 | `// about：显示版本信息` | 注释：说明这个分支干什么（注释不参与运行，但必须写，是给未来的人看的） |
-| `terminal_write("MaxZOS v0.9 - a toy OS\n");` | 在屏幕上输出这行文字。`\n` 是换行符 |
+| `terminal_write("MaxZOS v0.9 (2026-0823) made by ZhangMaixuan\n");` | 在屏幕上输出这行文字。`\n` 是换行符 |
 | `}` | 这个分支结束 |
 
 **关于 `terminal_write` 的用法**：它接受一个**字符串字面量**（双引号括起来的文字），像 `terminal_write("hello\n")` 这样。想输出什么就写什么，**记得结尾加 `\n` 换行**（否则下一行提示符会紧贴在你的文字后面）。
@@ -1246,7 +1248,7 @@ make run
 
 ```
 os/> about
-MaxZOS v0.9 - a toy OS
+MaxZOS v0.9 (2026-0823) made by ZhangMaixuan
 os/> aboutx
 unknown command
 ```
@@ -2929,6 +2931,10 @@ git restore .           放弃未提交改动（危险）
 |---|---|---|---|
 | `VGA_ATTR` | main.c | `0x1F` | 全局颜色 |
 | `INPUT_BUF_SIZE` | main.c | `256` | 命令行输入上限 |
+| `OS_NAME` | main.c | `"MaxZOS"` | 系统名称（横幅 / about / 帮助链接） |
+| `OS_VERSION_MAJOR` / `OS_VERSION_MINOR` | main.c | `0` / `9` | 版本号（显示为 `v0.9`） |
+| `OS_BUILD_YEAR` / `OS_BUILD_DATE` | main.c | `2026` / `"0823"` | 构建年 / 构建日期（月日 4 位，显示为 `2026-0823`） |
+| `OS_PROMPT_NAME` / `OS_PROMPT_SUFFIX` | main.c | `"os"` / `"> "` | 提示符前缀 / 后缀（组成 `os<路径>> `） |
 | `FS_MAX_FILES` | fs.h | `64` | 条目总数上限（文件 + 目录） |
 | `FS_MAX_NAME_LEN` | fs.h | `32` | 单段名字上限（含 '\0'） |
 | `FS_MAX_CONTENT` | fs.h | `256` | 文件内容上限 |

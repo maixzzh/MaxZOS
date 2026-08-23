@@ -11,9 +11,9 @@
 #ifndef FS_H
 #define FS_H
 
-#define FS_MAX_FILES     64      /* 条目总数上限（文件 + 目录共用一个表） */
-#define FS_MAX_NAME_LEN  32      /* 名字缓冲（含 '\0'），单段最长 31 字符 */
-#define FS_MAX_CONTENT   256     /* 文件内容最长 256 字节（另有 1 字节 '\0'） */
+#define FS_MAX_FILES     256      /* 条目总数上限（文件 + 目录共用一个表） */
+#define FS_MAX_NAME_LEN  260      /* 名字缓冲（含 '\0'），单段最长 31 字符 */
+#define FS_MAX_CONTENT   1024     /* 文件内容最长 256 字节（另有 1 字节 '\0'） */
 #define FS_MAX_PATH      128     /* fs_pwd 输出缓冲建议大小 */
 
 #define FS_TYPE_FILE     0

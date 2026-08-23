@@ -11,6 +11,25 @@
 #include "fs.h"
 #include "str.h"
 
+/* ---------- 系统标识信息（集中定义，改这里即可全局生效） ---------- */
+#define OS_NAME            "MaxZOS"        /* 系统名称（横幅、about、帮助链接共用） */
+#define OS_AUTHOR          "ZhangMaixuan"  /* 作者（横幅与 about 共用） */
+#define OS_VERSION_MAJOR   0               /* 版本号：大版本 */
+#define OS_VERSION_MINOR   9               /* 版本号：中版本 */
+#define OS_BUILD_YEAR      2026            /* 构建年 */
+#define OS_BUILD_DATE      "0823"          /* 构建日期（月日，4 位数字） */
+
+/* 字符串化辅助：先展开宏再转成字符串（否则得到 "OS_VERSION_MAJOR" 而非 "0"） */
+#define STR_HELPER(x) #x
+#define STR(x) STR_HELPER(x)
+/* 显示用版本串（如 "0.9"）与构建日期串（如 "2026-0823"），由上面的常量拼接 */
+#define OS_VERSION_STR  STR(OS_VERSION_MAJOR) "." STR(OS_VERSION_MINOR)
+#define OS_BUILD_STR    STR(OS_BUILD_YEAR) "-" OS_BUILD_DATE
+
+/* ---------- 提示符（os + 当前路径 + "> "，如 "os/> "、"os/docs> "） ---------- */
+#define OS_PROMPT_NAME   "MaxZOS"   /* 提示符前缀 */
+#define OS_PROMPT_SUFFIX "$"   /* 提示符后缀 */
+
 #define VGA_MEMORY  0xB8000
 #define VGA_ATTR    0x1F
 #define COLS        80
@@ -146,16 +165,16 @@ static void term_write_cb(const char* s) {
     terminal_write(s);
 }
 
-/* 提示符 = "os" + 当前路径 + "> "；根为 "os/> "，子目录为 "os/sub/> " */
+/* 提示符 = OS_PROMPT_NAME + 当前路径 + OS_PROMPT_SUFFIX；根为 "os/> " */
 static void print_prompt(void) {
     char path[FS_MAX_PATH];
     if (fs_pwd(path, sizeof(path)) != FS_OK) {
-        terminal_write("os/> ");   /* 兜底：路径超长时回到根提示（理论不可达） */
+        terminal_write(OS_PROMPT_NAME "/" OS_PROMPT_SUFFIX);  /* 兜底：回根提示（理论不可达） */
         return;
     }
-    terminal_write("os");
+    terminal_write(OS_PROMPT_NAME);
     terminal_write(path);
-    terminal_write("> ");
+    terminal_write(OS_PROMPT_SUFFIX);
 }
 
 /* 文件系统错误码 → 提示消息 */
@@ -278,7 +297,7 @@ static void process_command(void) {
         terminal_write("Shutting down...\n");
         acpi_power_off();
     } else if (cmd_is("about")){
-        terminal_write("MaxZOS make by Zhangmaixuan\n");
+        terminal_write(OS_NAME " v" OS_VERSION_STR " (" OS_BUILD_STR ") made by " OS_AUTHOR "\n");
     }else {
         terminal_write("unknown command\n");
     }
@@ -357,11 +376,11 @@ void kmain(unsigned long magic, unsigned long addr) {
     // 挂载文件系统（预留：将来从 multiboot modules / 磁盘加载）
     fs_init();
 
-    // 清屏并显示启动横幅与初始提示符
+    // 清屏并显示启动横幅与初始提示符（文字全部由开头常量生成）
     terminal_clear();
-    terminal_write("Welcome to MaxZOS v0.9\n");
-    terminal_write("made by ZhangMaixuan\n");
-    terminal_write("If you want to get help,please to github repo: maixzzh/MaxZOS\n\n");
+    terminal_write("Welcome to " OS_NAME " v" OS_VERSION_STR "\n");
+    terminal_write("made by " OS_AUTHOR "\n");
+    terminal_write("If you want to get help,please to github repo: maixzzh/" OS_NAME "\n\n");
     print_prompt();
 
     // 主循环：轮询键盘
