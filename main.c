@@ -40,9 +40,13 @@
 #define KEYBOARD_STATUS_PORT 0x64
 #define KBD_STATUS_OUTPUT_FULL 0x01
 #define INPUT_BUF_SIZE 256
+#define MAX_ENV_PATHS  8        /* 全局路径表容量（addpath 注册上限） */
 static char input_buf[INPUT_BUF_SIZE];
 static int  input_len = 0;
 static unsigned char shift_down = 0;  // Shift 是否处于按下状态
+/* 全局路径表：addpath 注册、cat 在当前目录找不到时按注册顺序回退查找（类似 Linux PATH） */
+static char env_paths[MAX_ENV_PATHS][FS_MAX_PATH];
+static int  env_path_count = 0;
 static volatile unsigned short* vga = (volatile unsigned short*)VGA_MEMORY;
 static unsigned int pos = 0;    // 当前光标所在的线性索引 (0 ~ SCR_SIZE-1)
 
@@ -185,8 +189,8 @@ static const char* fs_err_str(fs_status_t s) {
     case FS_NOT_FOUND:     return "file not found\n";
     case FS_FULL:          return "file table full\n";
     case FS_EMPTY_NAME:    return "empty name\n";
-    case FS_NAME_TOO_LONG: return "name too long (max 31 chars)\n";
-    case FS_BAD_CONTENT:   return "content too long (max 256 bytes)\n";
+    case FS_NAME_TOO_LONG: return "name too long\n";
+    case FS_BAD_CONTENT:   return "content too long\n";
     case FS_IS_DIR:        return "is a directory\n";
     case FS_NOT_DIR:       return "not a directory\n";
     case FS_BAD_PATH:      return "bad path\n";
@@ -196,6 +200,22 @@ static const char* fs_err_str(fs_status_t s) {
     case FS_IS_CWD:        return "cannot remove current directory\n";
     default:               return "unknown fs error\n";
     }
+}
+
+/* 拼接 prefix + "/" + name 到 out（cat 全局路径查找用）。
+ * 前缀尾已有 '/' 时不再重复加；缓冲不足返回 0（调用方负责报错） */
+static int join_path(char* out, unsigned int outsize,
+                     const char* prefix, const char* name) {
+    unsigned int pl = strlen(prefix);
+    int slash = (pl > 0 && prefix[pl - 1] == '/') ? 0 : 1;
+    if (pl + (unsigned int)slash + strlen(name) >= outsize) return 0;
+    strcpy(out, prefix);
+    if (slash) {
+        out[pl] = '/';
+        out[pl + 1] = '\0';
+    }
+    strcpy(out + pl + (unsigned int)slash, name);
+    return 1;
 }
 
 /* ---------- 命令解析 ---------- */
@@ -240,7 +260,8 @@ static void process_command(void) {
             }
         }
     } else if (cmd_is("cat")) {
-        // cat <path>：显示文件内容（只取第一个参数）
+        // cat <path>：显示文件内容（只取第一个参数）。
+        // 当前目录找不到时，按注册顺序回退到全局路径查找（见 addpath）。
         char* p = cmd_args();
         char* arg = next_arg(&p);
         if (arg == NULL) {
@@ -251,8 +272,30 @@ static void process_command(void) {
             if (st == FS_OK) {
                 terminal_write(buf);
                 terminal_putchar('\n');
+            } else if (st != FS_NOT_FOUND) {
+                terminal_write(fs_err_str(st));   /* 参数错误（如 cat 目录）立即报错 */
+            } else if (arg[0] == '/') {
+                terminal_write(fs_err_str(st));   /* 绝对路径已查到底，不再套前缀 */
             } else {
-                terminal_write(fs_err_str(st));
+                // 相对路径回退查找：按添加顺序逐个试 prefix/arg，
+                // 命中目录等"非未找到"错误立即停止（那是参数问题，不是查找失败）
+                char full[FS_MAX_PATH];
+                fs_status_t found = FS_NOT_FOUND;
+                for (int i = 0; i < env_path_count; i++) {
+                    if (!join_path(full, sizeof(full), env_paths[i], arg)) {
+                        terminal_write("path too long\n");
+                        found = FS_PATH_TOO_LONG;
+                        break;
+                    }
+                    found = fs_read(full, buf, sizeof(buf));
+                    if (found == FS_OK) {
+                        terminal_write(buf);
+                        terminal_putchar('\n');
+                        break;
+                    }
+                    if (found != FS_NOT_FOUND) break;   /* 其他错误：停止遍历 */
+                }
+                if (found != FS_OK) terminal_write(fs_err_str(found));
             }
         }
     } else if (cmd_is("rm") || cmd_is("delete")) {
@@ -281,6 +324,37 @@ static void process_command(void) {
         } else {
             fs_status_t st = fs_mkdir(arg);
             if (st != FS_OK) terminal_write(fs_err_str(st));
+        }
+    } else if (cmd_is("addpath")) {
+        // addpath <dir>：把目录加入全局路径表（cat 找不到时按序回退查找）
+        char* p = cmd_args();
+        char* arg = next_arg(&p);
+        if (arg == NULL) {
+            terminal_write("usage: addpath <dir>\n");
+        } else {
+            fs_status_t st = fs_isdir(arg);
+            if (st != FS_OK) {
+                terminal_write(fs_err_str(st));   /* 不存在或不是目录 */
+            } else if (env_path_count >= MAX_ENV_PATHS) {
+                terminal_write("too many paths\n");
+            } else {
+                int dup = 0;
+                for (int i = 0; i < env_path_count; i++) {
+                    if (strcmp(env_paths[i], arg) == 0) { dup = 1; break; }
+                }
+                if (dup) {
+                    terminal_write("already in path list\n");
+                } else {
+                    strcpy(env_paths[env_path_count], arg);
+                    env_path_count++;
+                }
+            }
+        }
+    } else if (cmd_is("listpath")) {
+        // listpath：列出全部已注册的全局路径（每行一个；空列表无输出）
+        for (int i = 0; i < env_path_count; i++) {
+            terminal_write(env_paths[i]);
+            terminal_putchar('\n');
         }
     } else if (cmd_is("cd")) {
         // cd <path>：切换当前目录；成功无输出（提示符自动刷新）

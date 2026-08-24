@@ -12,8 +12,8 @@
 #define FS_H
 
 #define FS_MAX_FILES     256      /* 条目总数上限（文件 + 目录共用一个表） */
-#define FS_MAX_NAME_LEN  260      /* 名字缓冲（含 '\0'），单段最长 31 字符 */
-#define FS_MAX_CONTENT   1024     /* 文件内容最长 256 字节（另有 1 字节 '\0'） */
+#define FS_MAX_NAME_LEN  260      /* 名字缓冲（含 '\0'），单段最长 259 字符 */
+#define FS_MAX_CONTENT   1024     /* 文件内容最长 1024 字节（另有 1 字节 '\0'） */
 #define FS_MAX_PATH      128     /* fs_pwd 输出缓冲建议大小 */
 
 #define FS_TYPE_FILE     0
@@ -59,5 +59,6 @@ fs_status_t fs_list(const char* path, fs_out_fn out);   /* path == NULL 表示�
 fs_status_t fs_cd(const char* path);
 fs_status_t fs_pwd(char* out, unsigned int maxlen);
 void fs_init(void);   /* 建立根目录；挂载钩子：将来从 multiboot modules / 磁盘加载 */
+fs_status_t fs_isdir(const char* path);  /* 目录 → FS_OK；文件 → FS_NOT_DIR；不存在 → FS_NOT_FOUND */
 
 #endif

@@ -665,12 +665,12 @@ void kmain(unsigned long magic, unsigned long addr) {
 具体来说：
 
 ```c
-static file_t files[FS_MAX_FILES];   // 64 个条目槽位，编译时分配好
+static file_t files[FS_MAX_FILES];   // 256 个条目槽位，编译时分配好
 ```
 
-- 文件系统最多同时存在 64 个**条目**（`FS_MAX_FILES`）——文件、目录共用这张表
-- 每个"槽位"大小固定：名字 32 字节 + 内容 257 字节 + 若干索引字段，约 308 字节
-- 整个表大约 19KB 内存，在 `.bss` 段（自动清零的全局区）
+- 文件系统最多同时存在 256 个**条目**（`FS_MAX_FILES`）——文件、目录共用这张表
+- 每个"槽位"大小固定：名字 260 字节 + 内容 1025 字节 + 若干索引字段，约 1.3 KiB
+- 整个表大约 326KB 内存，在 `.bss` 段（自动清零的全局区）
 
 **"万物皆文件"的简化实现**：目录也是表里的一个条目（`type = FS_TYPE_DIR`），只是它的"内容"不是文本，而是一个**子项链表**（`first_child` 指向第一个子条目，子条目用 `next_sibling` 串成链）。`ls` 遍历这条链，就能列出目录里的东西。
 
@@ -685,9 +685,9 @@ static file_t files[FS_MAX_FILES];   // 64 个条目槽位，编译时分配好
 **① 规模常量**（改这些就能调整系统的容量上限）：
 
 ```c
-#define FS_MAX_FILES     64      // 条目总数上限（文件 + 目录共用一个表）
-#define FS_MAX_NAME_LEN  32      // 单段名字缓冲区（含 '\0'），实际最长 31 字符
-#define FS_MAX_CONTENT   256     // 每个文件内容最多 256 字节
+#define FS_MAX_FILES     256     // 条目总数上限（文件 + 目录共用一个表）
+#define FS_MAX_NAME_LEN  260     // 单段名字缓冲区（含 '\0'），实际最长 259 字符
+#define FS_MAX_CONTENT   1024    // 每个文件内容最多 1024 字节
 #define FS_MAX_PATH      128     // fs_pwd 输出缓冲的建议大小
 #define FS_TYPE_FILE     0       // 条目类型：文件
 #define FS_TYPE_DIR      1       // 条目类型：目录
@@ -704,8 +704,8 @@ typedef enum {
     FS_NOT_FOUND,       // 条目不存在（路径某段找不到）
     FS_FULL,            // 条目表已满
     FS_EMPTY_NAME,      // 路径为空
-    FS_NAME_TOO_LONG,   // 单段名字超过 31 字符
-    FS_BAD_CONTENT,     // 内容超过 256 字节
+    FS_NAME_TOO_LONG,   // 单段名字超过 259 字符
+    FS_BAD_CONTENT,     // 内容超过 1024 字节
     /* ---- 多级目录新增，追加在末尾（不重排旧值） ---- */
     FS_IS_DIR,          // 期望是文件，实际是目录（如 cat 目录）
     FS_NOT_DIR,         // 期望是目录，实际是文件（路径中间段或末段）
@@ -972,7 +972,7 @@ menuentry "MaxZOS" {
 
 ## 14. 修改系统名称、版本号、提示符（系统标识信息）
 
-**目标**：改系统名称（`MaxZOS`）、版本号（`v0.9`）、构建日期、作者名、命令行提示符（`os/> `）。
+**目标**：改系统名称（`MaxZOS`）、版本号（`v0.9`）、构建日期、作者名、命令行提示符（当前为 `MaxZOS/$`）。
 
 **修改文件**：`main.c`（根目录）——**只改文件开头的常量区，其余代码一律不用动**。
 
@@ -995,7 +995,7 @@ menuentry "MaxZOS" {
 **理解一下这些常量的关系**：
 
 - 版本显示串 `v0.9` 由 大版本号 + 中版本号 拼成；构建日期显示为 `2026-0823`（构建年-构建日期）。拼接发生在常量区下方的 `OS_VERSION_STR` / `OS_BUILD_STR` 两个宏里，一般不用动。
-- **提示符** = `OS_PROMPT_NAME`（前缀）+ 当前路径 + `OS_PROMPT_SUFFIX`（后缀）。根目录是 `os/> `，子目录是 `os/docs> `。想改成 `MaxZOS$ ` 风格，改这两个常量即可——**不再有"三处提示符"的问题**，所有提示符都由 `print_prompt()` 一个函数生成。
+- **提示符** = `OS_PROMPT_NAME`（前缀）+ 当前路径 + `OS_PROMPT_SUFFIX`（后缀）。当前常量下根目录是 `MaxZOS/$`，子目录是 `MaxZOS/docs$`。想换成别的风格（比如带空格的 `MaxZOS$ `），改这两个常量即可——**不再有"三处提示符"的问题**，所有提示符都由 `print_prompt()` 一个函数生成。
 
 **验证**：`make run` → 开机横幅显示新版本号 → 输入 `about` 显示版本与构建信息 → 敲几个命令确认提示符样式统一。
 
@@ -1537,7 +1537,7 @@ static char* extract_quoted(char** pp) {
 
 **注意**：
 
-- `FS_MAX_NAME_LEN` 含 `'\0'`，所以"最长 40"实际是 39 个字符。错误消息里写着 "max 31 chars"，如果你改了长度，记得同步改 `main.c` 里 `fs_err_str` 的文案（第 22 节）。
+- `FS_MAX_NAME_LEN` 含 `'\0'`，所以"最长 40"实际是 39 个字符。错误消息是通用的 `name too long`（`main.c` 的 `fs_err_str`），不含具体数字，改上限时**不用**再同步文案。
 - 调用 `fs_read` 时的缓冲区要跟着改：`char buf[FS_MAX_CONTENT + 1];`（用宏而不是写死数字，这样改宏时不用改调用处）。
 - **把 `FS_MAX_FILES` 改小**（比如 8）会让现有文件表容纳更少文件，已创建的"多余"文件会变不可见——这是可预期的行为，测试时先 `make clean` 从零开始。
 
@@ -1713,8 +1713,8 @@ static const char* fs_err_str(fs_status_t s) {
     case FS_NOT_FOUND:     return "file not found\n";
     case FS_FULL:          return "file table full\n";
     case FS_EMPTY_NAME:    return "empty name\n";
-    case FS_NAME_TOO_LONG: return "name too long (max 31 chars)\n";// ← 注意同步限制数字
-    case FS_BAD_CONTENT:   return "content too long (max 256 bytes)\n";
+    case FS_NAME_TOO_LONG: return "name too long\n";// ← 改这里
+    case FS_BAD_CONTENT:   return "content too long\n";
     default:               return "unknown fs error\n";
     }
 }
@@ -2197,7 +2197,7 @@ typedef struct {
 - **索引即身份**：一个条目在表里的下标（0~63）就是它的"地址"。所有字段里存的都是**别的条目的下标**，不是指针——这就是"静态表"的含义。
 - **`used` 是生命标志**：槽位被占用 = 1；删除 = 置 0，槽位即可被新条目复用（`fs_find_free` 找的就是 `used == 0` 的槽）。
 - **下标 0 永远是根目录**：由 `fs_init()` 建立，`parent` 指向自己（所以根目录里 `..` 也回到根），且它不挂在任何子链上——`ls` 永远不会显示它。
-- **内存占用**：一个条目 308 字节，64 条共 19 KiB，在 4MB 内存里不算什么，但要知道它存在（§32.1 会讲怎么改大）。
+- **内存占用**：一个条目约 1.3 KiB（1304 字节），256 条共约 326 KiB，占 4MB 内存的 8%，心里要有数（§32.1 会讲怎么改大）。
 
 ### 31.4 两条链：子链与父链
 
@@ -2264,7 +2264,7 @@ docs(1).first_child = 2 ──> 2(note).next_sibling = -1
 | `fs_add_entry` | **唯一的"写槽"入口**：校验 → 占槽 → 写字段 → 挂子链尾 |
 | `fs_unlink_entry` | 从父链摘除条目并释放槽位 |
 
-`fs.h` 声明的 8 个公开 API（命令层只认识它们）：
+`fs.h` 声明的 9 个公开 API（命令层只认识它们）：
 
 | API | 作用 | 典型失败 |
 |---|---|---|
@@ -2276,6 +2276,7 @@ docs(1).first_child = 2 ──> 2(note).next_sibling = -1
 | `fs_list(path, out)` | 列目录；`path == NULL` 列当前目录 | `FS_NOT_DIR` |
 | `fs_cd(path)` | 切换当前目录（**解析成功才更新**，原子） | `FS_NOT_DIR` |
 | `fs_pwd(out, maxlen)` | 输出当前绝对路径 | `FS_PATH_TOO_LONG` |
+| `fs_isdir(path)` | 目录 → `FS_OK`；文件 → `FS_NOT_DIR`；不存在 → `FS_NOT_FOUND`（`addpath` 校验用） | `FS_NOT_FOUND` / `FS_NOT_DIR` |
 
 ## 32. 日常维护操作（文件系统篇）
 
@@ -2285,9 +2286,9 @@ docs(1).first_child = 2 ──> 2(note).next_sibling = -1
 
 | 常量 | 现值 | 含义 | 改它的注意事项 |
 |---|---|---|---|
-| `FS_MAX_FILES` | `64` | 条目总数（文件 + 目录），其中 1 个槽恒为根 | 表变大：每个条目 308 字节，64→128 大约多 20 KiB 内存；`fs_pwd` 里的栈上祖先链数组 `chain[FS_MAX_FILES]` 自动跟着变大 |
-| `FS_MAX_NAME_LEN` | `32` | 单段名字缓冲（**含** `'\0'`），实际最长 31 字符 | 名字最长 = 值 − 1，这是新手最容易踩的 off-by-one（见 §34.1） |
-| `FS_MAX_CONTENT` | `256` | 文件内容上限（另有 1 字节 `'\0'`） | `content[FS_MAX_CONTENT + 1]` 数组**必须**留出 `+1`；`main.c` 里 `cat` 的局部缓冲 `buf[FS_MAX_CONTENT + 1]` 用的是同一个宏，会自动跟随，但别把它改到几十 KB（栈空间有限） |
+| `FS_MAX_FILES` | `256` | 条目总数（文件 + 目录），其中 1 个槽恒为根 | 每个条目约 1.3 KiB，当前 256 条 ≈ 326 KiB；`fs_pwd` 里的栈上祖先链数组 `chain[FS_MAX_FILES]` 自动跟着变大 |
+| `FS_MAX_NAME_LEN` | `260` | 单段名字缓冲（**含** `'\0'`），实际最长 259 字符 | 名字最长 = 值 − 1，这是新手最容易踩的 off-by-one（见 §34.1）；它是"一段"名字的上限，不是路径总长 |
+| `FS_MAX_CONTENT` | `1024` | 文件内容上限（另有 1 字节 `'\0'`） | `content[FS_MAX_CONTENT + 1]` 数组**必须**留出 `+1`；`main.c` 里 `cat` 的局部缓冲 `buf[FS_MAX_CONTENT + 1]` 用的是同一个宏，会自动跟随，但别把它改到几十 KB（栈空间有限） |
 | `FS_MAX_PATH` | `128` | `fs_pwd` 输出缓冲的**建议大小** | 只影响 `main.c` 的 `print_prompt` 缓冲；路径真的超长时 `fs_pwd` 会安全返回 `FS_PATH_TOO_LONG` |
 
 ### 32.2 修改 ls 的输出格式
@@ -2316,8 +2317,8 @@ docs(1).first_child = 2 ──> 2(note).next_sibling = -1
 | `FS_NOT_FOUND` | `file not found` | 路径某段不存在 |
 | `FS_FULL` | `file table full` | 64 条用完了 |
 | `FS_EMPTY_NAME` | `empty name` | 路径为空字符串 |
-| `FS_NAME_TOO_LONG` | `name too long (max 31 chars)` | 单段超 31 字符 |
-| `FS_BAD_CONTENT` | `content too long (max 256 bytes)` | 内容超 256 字节 |
+| `FS_NAME_TOO_LONG` | `name too long` | 单段名字超限（含 `'\0'` 超过 `FS_MAX_NAME_LEN`） |
+| `FS_BAD_CONTENT` | `content too long` | 内容超过 `FS_MAX_CONTENT` 字节 |
 | `FS_IS_DIR` | `is a directory` | 期望文件却是目录（`cat` 目录） |
 | `FS_NOT_DIR` | `not a directory` | 期望目录却是文件（`cd` 文件） |
 | `FS_BAD_PATH` | `bad path` | 路径语法问题（如 `create /`） |
@@ -2462,12 +2463,12 @@ typedef enum {
 
 ### 34.1 忘了给 '\0' 留位置
 
-`FS_MAX_NAME_LEN` 是 `32`，但名字**最长 31 字符**——最后一个槽位要留给 `'\0'`。
+`FS_MAX_NAME_LEN` 是 `260`，但名字**最长 259 字符**——最后一个槽位要留给 `'\0'`。
 
 ```c
-/* ❌ 错：第 32 个字符把 '\0' 挤掉了 */
+/* ❌ 错：第 260 个字符把 '\0' 挤掉了 */
 char name[FS_MAX_NAME_LEN];
-for (i = 0; i < 32; i++) name[i] = input[i];   /* 没有 name[32] = '\0' 的位置 */
+for (i = 0; i < 260; i++) name[i] = input[i];   /* 没有 name[260] = '\0' 的位置 */
 
 /* ✅ 对：fs_add_entry 的做法——先拷 namelen 个，再手动补 '\0' */
 for (k = 0; k < namelen; k++) files[i].name[k] = name[k];
@@ -2735,6 +2736,21 @@ os/> create / x            → 期望：bad path
 
 **偷懒提示**：`make test` 已把上面大部分用例自动化（tools/fs_test.py），改完代码先跑它。
 
+**全局路径（addpath / cat 回退查找）**：
+
+```
+MaxZOS/$ addpath /docs        → 期望：无输出（成功）
+MaxZOS/$ addpath /docs        → 期望：already in path list（重复添加）
+MaxZOS/$ addpath /missing     → 期望：file not found（目录不存在）
+MaxZOS/$ addpath /docs/a.txt  → 期望：not a directory（路径指向文件）
+MaxZOS/$ addpath              → 期望：usage: addpath <dir>
+MaxZOS/$ listpath             → 期望：列出已注册路径，每行一个
+MaxZOS/$ cat note             → 期望：当前目录有同名文件 → 显示当前目录的
+MaxZOS/$ cat note             → 期望：当前目录没有 → 按注册顺序找到第一个
+MaxZOS/$ cat dir              → 期望：is a directory（命中目录条目立即报错，不继续遍历）
+MaxZOS/$ cat /abs/path        → 期望：绝对路径不受全局路径影响
+```
+
 ### 39.3 异常与边界
 
 ```
@@ -2863,6 +2879,8 @@ cat <路径>              查看文件内容
 mkdir <路径>            创建目录
 cd <路径>               切换目录（.. 上级、/ 根、相对或绝对路径均可）
 ls [路径]               列出目录内容（子目录名带 / 后缀，大小列 -）
+addpath <目录>          把目录加入全局路径（cat 找不到时按序回退查找，上限 8 个）
+listpath                列出全部已注册的全局路径
 rm  /  delete <路径>    删除文件或空目录（delete 是旧名，两者等价）
 exit                    关机
 ```
@@ -2935,9 +2953,9 @@ git restore .           放弃未提交改动（危险）
 | `OS_VERSION_MAJOR` / `OS_VERSION_MINOR` | main.c | `0` / `9` | 版本号（显示为 `v0.9`） |
 | `OS_BUILD_YEAR` / `OS_BUILD_DATE` | main.c | `2026` / `"0823"` | 构建年 / 构建日期（月日 4 位，显示为 `2026-0823`） |
 | `OS_PROMPT_NAME` / `OS_PROMPT_SUFFIX` | main.c | `"os"` / `"> "` | 提示符前缀 / 后缀（组成 `os<路径>> `） |
-| `FS_MAX_FILES` | fs.h | `64` | 条目总数上限（文件 + 目录） |
-| `FS_MAX_NAME_LEN` | fs.h | `32` | 单段名字上限（含 '\0'） |
-| `FS_MAX_CONTENT` | fs.h | `256` | 文件内容上限 |
+| `FS_MAX_FILES` | fs.h | `256` | 条目总数上限（文件 + 目录） |
+| `FS_MAX_NAME_LEN` | fs.h | `260` | 单段名字上限（含 '\0'） |
+| `FS_MAX_CONTENT` | fs.h | `1024` | 文件内容上限 |
 | `FS_MAX_PATH` | fs.h | `128` | fs_pwd 输出缓冲建议大小 |
 | `FS_TYPE_FILE` / `FS_TYPE_DIR` | fs.h | `0` / `1` | 条目类型 |
 | 提示符 `os<路径>> ` | main.c `print_prompt` | — | 命令行提示符（跟随当前目录） |

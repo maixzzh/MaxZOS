@@ -125,12 +125,12 @@ tests = [
     ("create sub/f hello",     []),
     ("ls sub",                 ["f", "5"]),
     ("cat sub/f",              ["hello"]),
-    ("cd sub",                 ["os/sub>"]),
-    ("cd ..",                  ["os/>"]),
-    ("cd /sub",                ["os/sub>"]),
-    ("cd /",                   ["os/>"]),
+    ("cd sub",                 ["MaxZOS/sub$"]),
+    ("cd ..",                  ["MaxZOS/$"]),
+    ("cd /sub",                ["MaxZOS/sub$"]),
+    ("cd /",                   ["MaxZOS/$"]),
     ("mkdir /sub/deep",        []),
-    ("cd sub/deep",            ["os/sub/deep>"]),
+    ("cd sub/deep",            ["MaxZOS/sub/deep$"]),
     ("cat ../f",               ["hello"]),
     ("ls ..",                  ["f", "5", "deep/"]),
     ("cd /",                   []),
@@ -148,12 +148,12 @@ tests = [
     ("rm .",                   ["cannot remove root"]),   # 在根目录：保护根优先于保护 cwd
     ("rm nonexistent",         ["file not found"]),
     ("mkdir tmp",              []),
-    ("cd tmp",                 ["os/tmp>"]),
+    ("cd tmp",                 ["MaxZOS/tmp$"]),
     ("rm .",                   ["cannot remove current directory"]),
     ("rm ..",                  ["cannot remove root"]),   # 在 /tmp 中 rm .. = 删根
     ("cd /",                   []),
     ("mkdir /tmp/deep2",       []),
-    ("cd /tmp/deep2",          ["os/tmp/deep2>"]),
+    ("cd /tmp/deep2",          ["MaxZOS/tmp/deep2$"]),
     ("rm .",                   ["cannot remove current directory"]),
     ("rm ..",                  ["directory not empty"]),   # 祖先 /tmp 非空，非空检查优先
     ("cd /",                   []),
@@ -165,6 +165,41 @@ tests = [
     ("mkdir a//b",             ["not a directory"]),   # 连续斜杠容忍，a 是文件
     ("delete a",               []),
     ("ls",                     ["Name", "Size(Byte)"]),
+    # E. 全局路径（addpath / listpath / cat 回退查找）
+    ("mkdir g1",               []),
+    ("mkdir g2",               []),
+    ("create g1/note data1",   []),
+    ("create g2/note data2",   []),
+    ("create g2/only2 data2b", []),
+    ("addpath /g1",            []),
+    ("addpath /g2",            []),
+    ("addpath /g1",            ["already in path list"]),
+    ("addpath /nonexist",      ["file not found"]),
+    ("addpath /g1/note",       ["not a directory"]),
+    ("addpath",                ["usage: addpath"]),
+    ("listpath",               ["/g1", "/g2"]),
+    ("cat note",               ["data1"]),      # 当前目录没有 → 第 1 个全局路径
+    ("cat only2",              ["data2b"]),     # 只有第 2 个全局路径有 → 也能找到
+    ("create note local",      []),
+    ("cat note",               ["local"]),      # 当前目录优先
+    ("mkdir /g2/dir",          []),
+    ("cat dir",                ["is a directory"]),  # 命中目录条目立即报错，不继续遍历
+    ("cat /g2/note",           ["data2"]),      # 绝对路径不受全局路径影响
+    # F. 全局路径上限（已有 /g1 /g2 两个，还剩 6 个名额）
+    ("mkdir /p1",              []),
+    ("mkdir /p2",              []),
+    ("mkdir /p3",              []),
+    ("mkdir /p4",              []),
+    ("mkdir /p5",              []),
+    ("mkdir /p6",              []),
+    ("mkdir /p7",              []),
+    ("addpath /p1",            []),
+    ("addpath /p2",            []),
+    ("addpath /p3",            []),
+    ("addpath /p4",            []),
+    ("addpath /p5",            []),
+    ("addpath /p6",            []),
+    ("addpath /p7",            ["too many paths"]),
 ]
 
 failed = 0

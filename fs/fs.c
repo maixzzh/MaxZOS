@@ -290,6 +290,13 @@ fs_status_t fs_cd(const char* path) {
     return FS_OK;
 }
 
+fs_status_t fs_isdir(const char* path) {
+    int i = fs_resolve(path);
+
+    if (i < 0) return (fs_status_t)(-i);
+    return files[i].type == FS_TYPE_DIR ? FS_OK : FS_NOT_DIR;
+}
+
 fs_status_t fs_pwd(char* out, unsigned int maxlen) {
     int chain[FS_MAX_FILES];            /* 栈上祖先链（自底向上） */
     int depth = 0;
